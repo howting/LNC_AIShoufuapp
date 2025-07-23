@@ -1,0 +1,1972 @@
+#include "scif2.h"
+#include "scif2_memory.h"
+#include "proc_protocol.h"
+#include "proc_ftp.h"
+#include "proc_data_talk.h"
+#include "proc_connect_build.h"
+
+#ifdef __QT
+    #include <QDebug>
+    #include <QHostInfo>
+    #include <QHostAddress>
+#endif
+
+#ifndef __QT
+#define WSA_VERSION MAKEWORD(2, 2) // using winsock 2.2
+//=======================��l�� window socket
+char initWinsock()
+{
+    WSADATA	WSAData = { 0 };
+    if (WSAStartup(WSA_VERSION, &WSAData) != 0)
+    {
+        // Tell the user that we could not find a usable WinSock DLL.
+        if (LOBYTE(WSAData.wVersion) != LOBYTE(WSA_VERSION) ||
+            HIBYTE(WSAData.wVersion) != HIBYTE(WSA_VERSION))
+            printf("[PD] Incorrect winsock version\n");
+
+        WSACleanup();
+        return 0;
+    }
+    return 1;
+}
+#endif
+
+/*
+struct sockaddr_in src_addr;	// controller address information
+#ifdef __GCC
+	socklen_t adlen;
+#else
+    int adlen;
+#endif
+*/
+
+Scif2::Scif2()
+{
+#ifndef __QT
+    initWinsock();
+#endif
+}
+
+//====================================================================
+int  Scif2::Init(DLL_USE_SETTING *pUseSetting, int MakerID, const char EncString[])
+{
+    unsigned char rt;
+    int i;
+    static bool Inited=false;
+    if (Inited) return 0;
+    Inited=true;
+    
+#ifdef __QT
+    MainSocket = new QUdpSocket();
+#else
+    MainSocket = new int;
+    *MainSocket = -1;
+#endif
+
+    //=============================解碼字串
+    int Key=0x788812BF;
+    int n = sizeof(FUNCTION_SETTING);
+    unsigned char InBuf[100], OutBuf[100];
+
+
+    //=====================初始化記憶體
+    pSes = new COMM_SESSION;
+    memset(pSes, 0, sizeof(COMM_SESSION));
+    if      (pUseSetting->SoftwareType==1)  pSes->SoftwareID=0x3567129A;
+    else if (pUseSetting->SoftwareType==2)  pSes->SoftwareID=0xAB358B23;
+    else if (pUseSetting->SoftwareType==3)  pSes->SoftwareID=0x3F57836A;
+    else if (pUseSetting->SoftwareType==4)  pSes->SoftwareID=0x4E4C4340;
+    else if (pUseSetting->SoftwareType==5)  pSes->SoftwareID=0x7F3D9EAC;
+    else                                    pSes->SoftwareID=0;
+
+
+    for (i=0; i<n+4; i++) HexToByte((unsigned char *)(EncString+i*2), &InBuf[i]);
+    rt = CrcDecrypt_adv(Key, InBuf, OutBuf, n);
+    memcpy(&pSes->Funcs, OutBuf, n);
+
+    if (!((rt)&&(MakerID==pSes->Funcs.MakerID)))
+    {
+        //解析設定值
+        pSes->Funcs.MakerID = 0;
+        pSes->Funcs.MakerPwd = 0;
+        pSes->Funcs.HaveMediaFunction = 0;
+        pSes->Funcs.MediaIPLong1 = 0;
+        pSes->Funcs.MediaIPLong2 = 0;
+        pSes->MemSizeI    = 0;
+        pSes->MemSizeO    = 0;
+        pSes->MemSizeC    = 0;
+        pSes->MemSizeS    = 0;
+        pSes->MemSizeA    = 0;
+        pSes->MemSizeR    = 0;
+        pSes->MemSizeF    = 0;
+        pSes->ConnectNum  = 0;
+    }
+    else
+    {
+        pSes->MemSizeI    = pUseSetting->MemSizeI;
+        pSes->MemSizeO    = pUseSetting->MemSizeO;
+        pSes->MemSizeC    = pUseSetting->MemSizeC;
+        pSes->MemSizeS    = pUseSetting->MemSizeS;
+        pSes->MemSizeA    = pUseSetting->MemSizeA;
+        pSes->MemSizeR    = pUseSetting->MemSizeR;
+        pSes->MemSizeF    = pUseSetting->MemSizeF;
+        pSes->ConnectNum  = pUseSetting->ConnectNum;
+    }
+
+
+    //------建立 talk info
+    if (pSes->ConnectNum>0)
+    {
+        pSes->pTalkInfo=new TALK_INFO[pSes->ConnectNum];
+        for (i=0; i<pSes->ConnectNum; i++)
+        {
+            pSes->pTalkInfo[i].SoftwareID = pSes->SoftwareID;
+            if ((pSes->MemSizeI>0)&&(pSes->MemSizeI<=4096))
+            {
+                pSes->pTalkInfo[i].Mem.I_Table = new unsigned char[pSes->MemSizeI];
+                memset(pSes->pTalkInfo[i].Mem.I_Table, 0x00, sizeof(unsigned char)*pSes->MemSizeI);
+            }
+            if ((pSes->MemSizeO>0)&&(pSes->MemSizeO<=4096))
+            {
+                pSes->pTalkInfo[i].Mem.O_Table = new unsigned char[pSes->MemSizeO];
+                memset(pSes->pTalkInfo[i].Mem.O_Table, 0x00, sizeof(unsigned char)*pSes->MemSizeO);
+            }
+            if ((pSes->MemSizeC>0)&&(pSes->MemSizeC<=4096))
+            {
+                pSes->pTalkInfo[i].Mem.C_Table = new unsigned char[pSes->MemSizeC];
+                memset(pSes->pTalkInfo[i].Mem.C_Table, 0x00, sizeof(unsigned char)*pSes->MemSizeC);
+            }
+            if ((pSes->MemSizeS>0)&&(pSes->MemSizeS<=4096))
+            {
+                pSes->pTalkInfo[i].Mem.S_Table = new unsigned char[pSes->MemSizeS];
+                memset(pSes->pTalkInfo[i].Mem.S_Table, 0x00, sizeof(unsigned char)*pSes->MemSizeS);
+            }
+            if ((pSes->MemSizeA>0)&&(pSes->MemSizeA<=4096))
+            {
+                pSes->pTalkInfo[i].Mem.A_Table = new unsigned char[pSes->MemSizeA];
+                memset(pSes->pTalkInfo[i].Mem.A_Table, 0x00, sizeof(unsigned char)*pSes->MemSizeA);
+            }
+            if ((pSes->MemSizeR>0)&&(pSes->MemSizeR<=6000000))
+            {
+                pSes->pTalkInfo[i].Mem.R_Table = new unsigned int[pSes->MemSizeR];
+                memset(pSes->pTalkInfo[i].Mem.R_Table, 0x00, sizeof(unsigned int)*pSes->MemSizeR);
+            }
+            if ((pSes->MemSizeF>0)&&(pSes->MemSizeF<=10000))
+            {
+                pSes->pTalkInfo[i].Mem.F_Table =new double[pSes->MemSizeF];
+                memset(pSes->pTalkInfo[i].Mem.F_Table, 0x00, sizeof(double)*pSes->MemSizeF);
+            }
+        }
+    }
+
+    //取得使用的通訊協定
+    printf("[PT] SoftwareID = 0x%x\n", (unsigned int)pSes->SoftwareID);
+    printf("[PT] MakerID = %d  %d\n", pSes->Funcs.MakerID, pSes->Funcs.MakerID);
+    printf("[PT] ConnectNum = %d\n", pSes->ConnectNum);
+    InitFtp(&pSes->FtpInfo);
+    //---------初始化 Talk
+    for (i=0; i<pSes->ConnectNum; i++)
+    {
+        TALK_INFO *pTalk = &pSes->pTalkInfo[i];
+        InitTalk(pTalk);
+    }
+
+    //-----設定回傳值
+    if (((rt)&&(MakerID==pSes->Funcs.MakerID))) return 100;
+    if (rt) return 10;
+    return 0;
+}
+
+
+
+//====================================================================
+void  Scif2::SetDebug(int level)
+{
+    if (pSes==0) return;
+    pSes->DebugLevel=level;
+}
+
+
+void  Scif2::SetTalkSoftwareType(int SIdx, int SoftwareType)
+{
+    if (pSes==0) return;
+    TALK_INFO *pTalk;
+    int SenId=SIdx;
+    if ((SenId<0)||(SenId>=pSes->ConnectNum)) return;
+    pTalk = &pSes->pTalkInfo[SenId];
+    if      (SoftwareType==1)  pTalk->SoftwareID=0x3567129A;
+    else if (SoftwareType==2)  pTalk->SoftwareID=0xAB358B23;
+    else if (SoftwareType==3)  pTalk->SoftwareID=0x3F57836A;
+    else if (SoftwareType==4)  pTalk->SoftwareID=0x4E4C4340;
+    else if (SoftwareType==5)  pTalk->SoftwareID=0x7F3D9EAC;
+    else                       pTalk->SoftwareID=0;
+}
+
+
+void  Scif2::Destroy()
+{
+    if (pSes==0) return;
+    int i;
+    TALK_INFO *pTalk;
+
+    for (i=0; i<pSes->ConnectNum; i++)
+    {
+        pTalk = &pSes->pTalkInfo[i];
+        pTalk->Action=CONNECT_ACTION_TO_DISCONNECT;  //
+    }
+
+    //-------終結鏡射記憶體
+    if (pSes->MemSizeI>0)
+        for (i=0; i<pSes->ConnectNum; i++) delete pSes->pTalkInfo[i].Mem.I_Table;
+    if (pSes->MemSizeO>0)
+        for (i=0; i<pSes->ConnectNum; i++) delete pSes->pTalkInfo[i].Mem.O_Table;
+    if (pSes->MemSizeC>0)
+        for (i=0; i<pSes->ConnectNum; i++) delete pSes->pTalkInfo[i].Mem.C_Table;
+    if (pSes->MemSizeS>0)
+        for (i=0; i<pSes->ConnectNum; i++) delete pSes->pTalkInfo[i].Mem.S_Table;
+    if (pSes->MemSizeA>0)
+        for (i=0; i<pSes->ConnectNum; i++) delete pSes->pTalkInfo[i].Mem.A_Table;
+    if (pSes->MemSizeR>0)
+        for (i=0; i<pSes->ConnectNum; i++) delete pSes->pTalkInfo[i].Mem.R_Table;
+    if (pSes->MemSizeF>0)
+        for (i=0; i<pSes->ConnectNum; i++) delete pSes->pTalkInfo[i].Mem.F_Table;
+    //------終結 talk info
+    if (pSes->ConnectNum>0)
+    {
+        delete pSes->pTalkInfo;
+    }
+    delete pSes;
+    pSes=0;
+}
+
+
+//=================== 連線相關的函式 ========================================
+//=====直接輸入控制器IP進行連線
+#ifdef __QT
+    int  Scif2::ConnectLocalIP(int SIdx, QString IP)
+    {
+        if (pSes==0) return 0;
+        if ((SIdx<0)||(SIdx>=pSes->ConnectNum)) return 0;
+        TALK_INFO *pTalk = &pSes->pTalkInfo[SIdx];
+        pTalk->ReconAddr.setAddress(IP);
+        pTalk->Action=CONNECT_ACTION_TO_CONNECT;
+        return 1;
+    }
+#else
+    int  Scif2::ConnectLocalIP(int SIdx, char* IP)
+    {
+        if (pSes==0) return 0;
+        if ((SIdx<0)||(SIdx>=pSes->ConnectNum)) return 0;
+        TALK_INFO *pTalk = &pSes->pTalkInfo[SIdx];
+        unsigned int IPLong = inet_addr(IP);
+        pTalk->ReconAddr.sin_family = AF_INET;
+        pTalk->ReconAddr.sin_addr.s_addr = IPLong;
+        pTalk->ReconAddr.sin_port = htons(PORT_UDP_RECON);	  // short, network byte order
+        memset(&(pTalk->ReconAddr.sin_zero), '\0', 8); // zero the rest of the struct
+        pTalk->Action=CONNECT_ACTION_TO_CONNECT;
+        return 1;
+    }
+#endif
+
+//=======中斷連線
+int  Scif2::Disconnect(int SIdx)
+{
+    if (pSes==0) return 0;
+    int SenId=SIdx;
+    if ((SenId<0)||(SenId>=pSes->ConnectNum)) return 0;
+    TALK_INFO *pTalk = &pSes->pTalkInfo[SenId];
+
+    pTalk->Action=CONNECT_ACTION_TO_DISCONNECT;  //
+    return 1;
+}
+
+//設定連線密碼
+int  Scif2::SetConnectPwd(int SIdx, char *Pwd)
+{
+    if (pSes==0) return 0;
+    int SenId=SIdx;
+    if ((SenId<0)||(SenId>=pSes->ConnectNum)) return 0;
+    TALK_INFO *pTalk = &pSes->pTalkInfo[SenId];
+    memcpy(pTalk->ConnectPwd, Pwd, 16);
+    return 1;
+}
+
+//==============================================================================
+
+
+
+
+//------------------------------ I
+int Scif2::memI(int SIdx, int addr)
+{
+    if (pSes==0) return 0;
+    if (addr<pSes->MemSizeI) return pSes->pTalkInfo[SIdx].Mem.I_Table[addr];
+    else                      return 0;
+}
+//------------------------------ O
+int Scif2::memO(int SIdx, int addr)
+{
+    if (pSes==0) return 0;
+    if (addr<pSes->MemSizeO) return pSes->pTalkInfo[SIdx].Mem.O_Table[addr];
+    else                      return 0;
+}
+//------------------------------ C
+int Scif2::memC(int SIdx, int addr)
+{
+    if (pSes==0) return 0;
+    if (addr<pSes->MemSizeC) return pSes->pTalkInfo[SIdx].Mem.C_Table[addr];
+    else                      return 0;
+}
+//------------------------------ S
+int Scif2::memS(int SIdx, int addr)
+{
+    if (pSes==0) return 0;
+    if (addr<pSes->MemSizeS) return pSes->pTalkInfo[SIdx].Mem.S_Table[addr];
+    else                      return 0;
+}
+//------------------------------ A
+int Scif2::memA(int SIdx, int addr)
+{
+    if (pSes==0) return 0;
+    if (addr<pSes->MemSizeA) return pSes->pTalkInfo[SIdx].Mem.A_Table[addr];
+    else                      return 0;
+}
+
+//------------------------------ R
+int  Scif2::memR(int SIdx, int addr)
+{
+    if (pSes==0) return 0;
+    if (addr<pSes->MemSizeR) return pSes->pTalkInfo[SIdx].Mem.R_Table[addr];
+    else                      return 0;
+}
+
+//------------------------------ F
+double Scif2::memF(int SIdx, int addr)
+{
+    if (pSes==0) return 0;
+    if ( (addr>=F_OFFSET) &&(addr<(F_OFFSET+pSes->MemSizeF)) ) return pSes->pTalkInfo[SIdx].Mem.F_Table[addr-F_OFFSET];
+    else                                                        return 0;
+}
+
+//----------字串讀取
+int  Scif2::memRString(int SIdx, int addr, int RSize, char *Buf )
+{
+    if (pSes==0) return 0;
+    char *pChar;
+    int i;
+    if (addr>=pSes->MemSizeR) return 0;
+    int BufSize = RSize*4;
+    memset(Buf, 0, BufSize);
+    pChar = (char *)(&pSes->pTalkInfo[SIdx].Mem.R_Table[addr]);
+    //檢查是否有0
+    for (i=0; i<BufSize; i++)
+    {
+        if (pChar[i]==0) break;
+    }
+    memcpy(Buf, pChar, BufSize);
+    if (i<BufSize)
+    {
+        memcpy(Buf, pChar, i);
+        return i;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+
+//------------------------------ O
+int Scif2::memSetO(int SIdx, int addr, char val)
+{
+    if (pSes==0) return 0;
+    if (addr>=pSes->MemSizeO) return 0;
+    pSes->pTalkInfo[SIdx].Mem.O_Table[addr] = val;
+    return 1;
+}
+//------------------------------ C
+int Scif2::memSetC(int SIdx, int addr, char val)
+{
+    if (pSes==0) return 0;
+    if (addr>=pSes->MemSizeC) return 0;
+    pSes->pTalkInfo[SIdx].Mem.C_Table[addr] = val;
+    return 1;
+}
+//------------------------------ S
+int Scif2::memSetS(int SIdx, int addr, char val)
+{
+    if (pSes==0) return 0;
+    if (addr>=pSes->MemSizeS) return 0;
+    pSes->pTalkInfo[SIdx].Mem.S_Table[addr] = val;
+    return 1;
+}
+//------------------------------ A
+int Scif2::memSetA(int SIdx, int addr, char val)
+{
+    if (pSes==0) return 0;
+    if (addr>=pSes->MemSizeA) return 0;
+    pSes->pTalkInfo[SIdx].Mem.A_Table[addr] = val;
+    return 1;
+}
+
+//------------------------------ R
+int  Scif2::memSetR(int SIdx, int addr, int val)
+{
+    if (pSes==0) return 0;
+    if (addr>=pSes->MemSizeR) return 0;
+    pSes->pTalkInfo[SIdx].Mem.R_Table[addr] = val;
+    return 1;
+}
+
+//------------------------------ F
+int Scif2::memSetF(int SIdx, int addr, double val)
+{
+    if (pSes==0) return 0;
+    if ( (addr<F_OFFSET)||(addr>=(F_OFFSET+pSes->MemSizeF)) ) return 0;
+    pSes->pTalkInfo[SIdx].Mem.F_Table[addr-F_OFFSET] = val;
+    return 1;
+}
+
+//----------字串讀取
+int Scif2::memSetRString(int SIdx, int addr, int RSize, char *Buf )
+{
+    if (pSes==0) return 0;
+    if (addr>=pSes->MemSizeR) return 0;
+    char *pChar;
+    int i;
+    int BufSize = RSize*4;
+    pChar = (char *)(&pSes->pTalkInfo[SIdx].Mem.R_Table[addr]);
+    memset(pChar, 0x00, BufSize);
+    //檢查是否有0
+    for (i=0; i<BufSize; i++)
+    {
+        pChar[i] = Buf[i];
+        if (Buf[i]==0) break;
+    }
+    return 1;
+}
+//==============================================================================
+
+
+//--==================================檔案傳輸功能=================================
+//上傳檔案
+int  Scif2::FtpSetTalk(int SIdx)
+{
+    if (pSes==0) return 0;
+    int SenId=SIdx;
+    if ((SenId<0)||(SenId>=pSes->ConnectNum)) return 0;
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;
+    //pSes->FtpInfo.pTalk = &pSes->pTalkInfo[SIdx];
+    pSes->FtpTalkIdx = SIdx;
+    return 1;
+}
+
+//上傳檔案
+int  Scif2::FtpUploadFile(int Folder, char *SubFolder, char *Filename, char *LocalFilename)
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    pSes->FtpInfo.State = FTP_STATE_PENDING;
+    pSes->FtpInfo.Folder = Folder;
+    strcpy(pSes->FtpInfo.SubFolder, SubFolder);
+    strcpy(pSes->FtpInfo.FileName, Filename);
+    strcpy(pSes->FtpInfo.LocalName, LocalFilename);
+    pSes->FtpInfo.Action = FTP_ACTION_TO_UPLOAD_FILE;
+    return 1;
+}
+
+//下載檔案
+int  Scif2::FtpDownloadFile(int Folder, char *SubFolder, char *Filename, char *LocalFilename)
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    pSes->FtpInfo.State = FTP_STATE_PENDING;
+    pSes->FtpInfo.Folder = Folder;
+    strcpy(pSes->FtpInfo.SubFolder, SubFolder);
+    strcpy(pSes->FtpInfo.FileName, Filename);
+    strcpy(pSes->FtpInfo.LocalName, LocalFilename);
+    pSes->FtpInfo.Action = FTP_ACTION_TO_DOWNLOAD_FILE;
+    return 1;
+}
+
+//刪除檔案
+int  Scif2::FtpDeleteFile(int Folder, char *SubFolder, char *Filename)
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    pSes->FtpInfo.State = FTP_STATE_PENDING;
+    pSes->FtpInfo.Folder = Folder;
+    strcpy(pSes->FtpInfo.SubFolder, SubFolder);
+    strcpy(pSes->FtpInfo.FileName, Filename);
+    pSes->FtpInfo.Action = FTP_ACTION_TO_DELETE_FILE;
+    return 1;
+}
+
+//上傳檔案 -- 多個
+int  Scif2::FtpUploadFiles(int Count, FTP_TRANFER_FILE *TransferFiles)
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (Count>MAX_TRANSFER_FILE_COUNT) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    pSes->FtpInfo.State = FTP_STATE_PENDING;
+    pSes->FtpInfo.TransferCount = Count;
+    pSes->FtpInfo.TransferIndex = 0;
+    memcpy(pSes->FtpInfo.TransferFiles, TransferFiles, Count*sizeof(FTP_TRANFER_FILE));
+    pSes->FtpInfo.Action = FTP_ACTION_TO_UPLOAD_FILES;
+    return 1;
+}
+
+//下載檔案 -- 多個
+int  Scif2::FtpDownloadFiles(int Count, FTP_TRANFER_FILE *TransferFiles)
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (Count>MAX_TRANSFER_FILE_COUNT) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    pSes->FtpInfo.State = FTP_STATE_PENDING;
+    pSes->FtpInfo.TransferCount = Count;
+    pSes->FtpInfo.TransferIndex = 0;
+    memcpy(pSes->FtpInfo.TransferFiles, TransferFiles, Count*sizeof(FTP_TRANFER_FILE));
+    pSes->FtpInfo.Action = FTP_ACTION_TO_DOWNLOAD_FILES;
+    return 1;
+}
+
+//刪除檔案 -- 多個
+int  Scif2::FtpDeleteFiles(int Count, FTP_TRANFER_FILE *TransferFiles)
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (Count>MAX_TRANSFER_FILE_COUNT) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    pSes->FtpInfo.State = FTP_STATE_PENDING;
+    pSes->FtpInfo.TransferCount = Count;
+    pSes->FtpInfo.TransferIndex = 0;
+    memcpy(pSes->FtpInfo.TransferFiles, TransferFiles, Count*sizeof(FTP_TRANFER_FILE));
+    pSes->FtpInfo.Action = FTP_ACTION_TO_DELETE_FILES;
+    return 1;
+}
+
+//=====================增加幾個函式，方便 C# 使用=================
+int  Scif2::FtpTransferFileReset()
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    pSes->FtpInfo.TransferCount = 0;
+    return 1;
+}
+
+int  Scif2::FtpTransferFileAdd(int Folder, char *SubFolder, char *Filename, char *LocalFilename)
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    if (pSes->FtpInfo.TransferCount>=128) return 0;
+    int k;
+    k=pSes->FtpInfo.TransferCount;
+    pSes->FtpInfo.TransferFiles[k].Folder = Folder;
+    memcpy(pSes->FtpInfo.TransferFiles[k].SubFolder, SubFolder, 32);
+    memcpy(pSes->FtpInfo.TransferFiles[k].Filename, Filename, 32);
+    memcpy(pSes->FtpInfo.TransferFiles[k].LocalFilename, LocalFilename, 256);
+    pSes->FtpInfo.TransferCount++;
+    return 1;
+}
+
+int  Scif2::FtpUploadFiles2()
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    if (pSes->FtpInfo.TransferCount==0) return 0;
+    pSes->FtpInfo.State = FTP_STATE_PENDING;
+    pSes->FtpInfo.TransferIndex = 0;
+    pSes->FtpInfo.Action = FTP_ACTION_TO_UPLOAD_FILES;
+    return 1;
+}
+
+int  Scif2::FtpDownloadFiles2()
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    if (pSes->FtpInfo.TransferCount==0) return 0;
+    pSes->FtpInfo.State = FTP_STATE_PENDING;
+    pSes->FtpInfo.TransferIndex = 0;
+    pSes->FtpInfo.Action = FTP_ACTION_TO_DOWNLOAD_FILES;
+    return 1;
+}
+
+int  Scif2::FtpDeleteFiles2()
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    if (pSes->FtpInfo.TransferCount==0) return 0;
+    pSes->FtpInfo.State = FTP_STATE_PENDING;
+    pSes->FtpInfo.TransferIndex = 0;
+    pSes->FtpInfo.Action = FTP_ACTION_TO_DELETE_FILES;
+    return 1;
+}
+
+
+
+//建立資料夾
+int  Scif2::FtpMakeDir(int Folder, char *DirName)
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    pSes->FtpInfo.State = FTP_STATE_PENDING;
+    pSes->FtpInfo.Folder = Folder;
+    strcpy(pSes->FtpInfo.FileName, DirName);
+    pSes->FtpInfo.Action = FTP_ACTION_TO_MAKE_DIR;
+    return 1;
+}
+
+
+//取得檔案清單 ------- 增加此項，以取得子目錄的內容
+int  Scif2::FtpGetFileList(int Folder, char *SubFolder, char *HeadFilter, char *TailFilter)
+{
+    if (pSes==0) return 0;
+    if ((pSes->FtpTalkIdx<0)||(pSes->FtpTalkIdx>=pSes->ConnectNum)) return 0;
+    if (pSes->pTalkInfo[pSes->FtpTalkIdx].ConnState!=SC_CONN_STATE_OK) return 0;   //未連線不可傳輸
+    if (pSes->FtpInfo.State!=FTP_STATE_IDLE) return 0;                //不在 Idle 狀態
+    if (pSes->FtpInfo.Action!=FTP_ACTION_IDLE) return 0;
+    if (pSes->FtpInfo.TryTimes>0) return 0;
+    pSes->FtpInfo.State = FTP_STATE_PENDING;
+    pSes->FtpInfo.Folder = Folder;
+    strcpy(pSes->FtpInfo.SubFolder, SubFolder);
+    strcpy(pSes->FtpInfo.HeadFilter, HeadFilter);
+    strcpy(pSes->FtpInfo.TailFilter, TailFilter);
+    pSes->FtpInfo.Action = FTP_ACTION_TO_LIST_FILE;
+    MainProcess();
+    int TimePassed=0;
+    while (1)
+    {
+        MicroSleep(15000);
+        TimePassed+=MainProcess();
+        if (pSes->FtpInfo.FtpDone)
+        {
+            pSes->FtpInfo.FtpDone = 0;
+            pSes->FtpInfo.LastState = pSes->FtpInfo.State;
+            pSes->FtpInfo.LastResult = pSes->FtpInfo.Result;
+            pSes->FtpInfo.State = FTP_STATE_IDLE;
+            return 1;
+        }
+        if (TimePassed>=1000000) return 0;
+    }
+}
+
+
+//取得執行結果
+int  Scif2::FtpCheckDone()
+{
+    if (pSes==0) return 0;
+    if (pSes->FtpInfo.FtpDone)
+    {
+        pSes->FtpInfo.FtpDone = 0;
+        pSes->FtpInfo.LastState = pSes->FtpInfo.State;
+        pSes->FtpInfo.LastResult = pSes->FtpInfo.Result;
+        pSes->FtpInfo.State = FTP_STATE_IDLE;
+        pSes->FtpInfo.Result = FTP_RESULT_SUCCESS;
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+//讀取FTP檔案清單筆數
+int  Scif2::FtpReadFileCount()
+{
+    if (pSes==0) return 0;
+    return pSes->FtpInfo.FileCount;
+}
+
+//讀取FTP檔案名稱
+int  Scif2::FtpReadFile(int Index, FTP_FILE *file)
+{
+    if (pSes==0) return 0;
+    if (Index<pSes->FtpInfo.FileCount)
+    {
+        memcpy(file, &pSes->FtpInfo.FileLists[Index], sizeof(FTP_FILE));
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+//取得本地端檔案清單
+int  Scif2::FileGetFileList(char *Path, char *HeadFilter, char *TailFilter)
+{
+    if (pSes==0) return 0;
+    FTP_INFO *pFtp = &pSes->FtpInfo;
+    int retValue, rt;
+    struct stat buf;
+    time_t tt;
+    struct tm *tm1;
+    //char filename[200];
+    char Fullname[200];
+    unsigned short i, lenName, lenHead=0, lenTail=0;
+    unsigned char Pass;
+
+    //-----檢查 Head 長度
+    for (i=0; i<10; i++)
+    {
+        if (HeadFilter[i]==0)
+        {
+            lenHead = i;
+            break;
+        }
+    }
+    //-----檢查 Tail 長度
+    for (i=0; i<10; i++)
+    {
+        if (TailFilter[i]==0)
+        {
+            lenTail = i;
+            break;
+        }
+    }
+    pFtp->LocalFileCount = 0;
+    strcpy(pFtp->LocalPath, Path);
+    DIR *dp;
+    struct dirent *dirp;
+    dp = opendir(Path);
+    if (dp != NULL)
+    {
+        while ((dirp = readdir(dp)) != NULL)
+        {
+            if (dirp->d_name[0]!='.')
+            {
+                Pass = 1;
+
+                sprintf(Fullname, "%s\\%s", Path, dirp->d_name);
+                if (stat(Fullname, &buf)>=0)
+                {
+                    Pass=(buf.st_mode&0x8000);
+                }
+                if ((Pass)&&(lenHead>0))
+                {
+                    rt = memcmp(dirp->d_name, HeadFilter, lenHead);
+                    if (rt!=0) Pass=0;
+                }
+                if ((Pass)&&(lenTail>0))
+                {
+                    //-----檢查 Head 長度
+                    for (i=0; i<260; i++)
+                    {
+                        if (dirp->d_name[i]==0)
+                        {
+                            lenName = i;
+                            break;
+                        }
+                    }
+                    rt = memcmp(dirp->d_name+(lenName-lenTail), TailFilter, lenTail);
+                    if (rt!=0) Pass=0;
+                }
+                //設定清單
+                if (Pass)
+                {
+                    memcpy(pFtp->LocalFileLists[pFtp->LocalFileCount].filename, dirp->d_name, FILENAME_LENGTH);
+                    pFtp->LocalFileCount++;
+                }
+            }
+            //else if (dirp == NULL) break;
+            if (pFtp->LocalFileCount>=MAX_FILE_LIST_NUM) break;
+        }
+        closedir(dp);
+        retValue = pFtp->LocalFileCount;
+    }
+    else
+    {
+        retValue = 0;
+    }
+
+    //取得檔案屬性
+    if (retValue>0)
+    {
+        for (i=0; i<retValue; i++)
+        {
+            //取得檔案屬性
+            sprintf(Fullname, "%s\\%s", Path, pFtp->LocalFileLists[i].filename);
+            if (stat(Fullname, &buf)>=0)
+            {
+                if (buf.st_mode&0x8000)
+                {
+                    pFtp->LocalFileLists[i].filesize = buf.st_size;
+                    tt = time_t(buf.st_mtime);
+                    tm1 = localtime(&tt);
+                    pFtp->LocalFileLists[i].year = tm1->tm_year+1900;
+                    pFtp->LocalFileLists[i].month = tm1->tm_mon+1;
+                    pFtp->LocalFileLists[i].day = tm1->tm_mday;
+                    pFtp->LocalFileLists[i].hour = tm1->tm_hour;
+                    pFtp->LocalFileLists[i].minute = tm1->tm_min;
+                    pFtp->LocalFileLists[i].second = tm1->tm_sec;
+                }
+            }
+        }
+    }
+    return retValue;
+}
+
+//讀取本地檔案清單筆數
+int  Scif2::FileReadFileCount()
+{
+    if (pSes==0) return 0;
+    return pSes->FtpInfo.LocalFileCount;
+}
+
+//讀取本地檔案名稱
+int  Scif2::FileReadFile(int Index, FTP_FILE *file)
+{
+    if (pSes==0) return 0;
+    if (Index<pSes->FtpInfo.LocalFileCount)
+    {
+        memcpy(file, &pSes->FtpInfo.LocalFileLists[Index], sizeof(FTP_FILE));
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+//刪除本地檔案名稱
+int  Scif2::FileDeleteFile(int Index)
+{
+    if (pSes==0) return 0;
+    if (Index>=pSes->FtpInfo.LocalFileCount) return 0;
+    char fullname[260];
+    sprintf(fullname, "%s\\%s", pSes->FtpInfo.LocalPath, pSes->FtpInfo.LocalFileLists[Index].filename);
+    if (remove(fullname)!=-1) return 1;
+    else                      return 0;
+}
+
+
+//==============================================================================
+
+
+
+
+//==================================================================
+int    Scif2::GetCommonMsg(int MsgID )
+{
+    if (pSes==0) return 0;
+    switch(MsgID)
+    {
+    //
+    case SCIF_PROC_COUNTER:        return pSes->ProcCounter;
+    case SCIF_FTP_STATE:           return pSes->FtpInfo.State;
+    case SCIF_FTP_RESULT:          return pSes->FtpInfo.Result;
+    case SCIF_FTP_STEP:            return pSes->FtpInfo.StepIndex;
+    case SCIF_FTP_TOTAL_PACKAGE:   return pSes->FtpInfo.TotalIdx;
+    case SCIF_FTP_CURRENT_PACKAGE: return pSes->FtpInfo.CurrentIdx;
+    case SCIF_FTP_TOTAL_FILE:      return pSes->FtpInfo.TransferCount;
+    case SCIF_FTP_CURRENT_FILE:    return pSes->FtpInfo.TransferIndex;
+
+    case SCIF_MAKER_ID:            return pSes->Funcs.MakerID;
+
+    case SCIF_MEM_SIZE_I:    return pSes->MemSizeI;
+    case SCIF_MEM_SIZE_O:    return pSes->MemSizeO;
+    case SCIF_MEM_SIZE_C:    return pSes->MemSizeC;
+    case SCIF_MEM_SIZE_S:    return pSes->MemSizeS;
+    case SCIF_MEM_SIZE_A:    return pSes->MemSizeA;
+    case SCIF_MEM_SIZE_R:    return pSes->MemSizeR;
+    case SCIF_MEM_SIZE_F:    return pSes->MemSizeF;
+    default: return 0;
+    }
+    return 0;
+}
+
+//==================================================================
+int    Scif2::GetTalkMsg(int SIdx, int MsgID )
+{
+    if (pSes==0) return 0;
+    int SenId=SIdx;
+    if ((SenId<0)||(SenId>=pSes->ConnectNum)) return 0;
+    TALK_INFO *pTalk = &pSes->pTalkInfo[SenId];
+    //---------------與 talk 相關的訊息
+    switch(MsgID)
+    {
+    case SCIF_CONNECT_STATE:             return pTalk->ConnState;
+    //case SCIF_REMOTE_IPLONG:             return pTalk->ReconAddr.toIPv4Address();
+    case SCIF_CONNECT_STEP:              return pTalk->StepIndex;
+    case SCIF_CONNECT_RESPONSE:          return pTalk->ConnectResponse;
+    case SCIF_TALK_STATE:                return pTalk->TalkState;
+    //
+    case SCIF_RESPONSE_TIME:             return pTalk->ResponseTime;
+    case SCIF_OK_COUNT:                  return pTalk->Section.RxPkgCnt;
+    case SCIF_CRC_ERR_CNT:               return pTalk->Section.RxCrcPkgCnt;
+    case SCIF_TX_PKG_CNT:                return pTalk->Section.TxPkgCnt;
+    case SCIF_TX_PKG_RETRY_CNT:          return pTalk->Section.TxPkgRetryCnt;
+    case SCIF_TX_CONNECT_CNT:            return pTalk->Section.TxConnectCnt;
+    case SCIF_RX_UNEXPECT_CNT:           return pTalk->Section.RxUnExpectCnt;
+    case SCIF_RX_ERR_FMT_CNT:            return pTalk->Section.RxErrFmtCnt;
+    case SCIF_RX_CONNECT_CNT:            return pTalk->Section.RxConnectCnt;
+
+    //
+    case SCIF_LOOP_QUEUE_PKG_COUNT:      return pTalk->LoopQueue.WriteAddr;
+    case SCIF_DIRECT_QUEUE_PKG_COUNT:    return (pTalk->DirectQueue.WriteAddr-pTalk->DirectQueue.ReadAddr)&DIRECT_ADDR_MASK;
+    case SCIF_LOOP_COUNT:                return pTalk->LoopCount;
+    }
+    return 0;
+}
+
+//=====================================================================
+void  Scif2::GetTalkError(int SIdx, ERROR_MSG *Msg)
+{
+    if (pSes==0) return;
+    Msg->Type = 0;
+    Msg->Cmd  = 0;
+    Msg->addr = 0;
+    Msg->num  = 0;
+    Msg->Error = 0;
+    int SenId=SIdx;
+    if ((SenId<0)||(SenId>=pSes->ConnectNum)) return;
+    TALK_INFO *pTalk = &pSes->pTalkInfo[SenId];
+
+    Msg->Type = pTalk->ErrRec.Type;
+    Msg->Cmd  = pTalk->ErrRec.Cmd;
+    Msg->addr = pTalk->ErrRec.addr;
+    Msg->num  = pTalk->ErrRec.num;
+    Msg->Error = pTalk->ErrRec.Error;
+    pTalk->ErrRec.Type=0;
+    pTalk->ErrRec.Error=0;
+    pTalk->ErrRec.Cmd=0;
+    pTalk->ErrRec.addr=0;
+    pTalk->ErrRec.num=0;
+}
+
+
+//============================= 取得通訊處理狀態
+int  Scif2::GetTranState(int pTran)
+{
+    if (pSes==0) return 0;
+    if (pTran==0) return SC_TRANSACTION_INVALID;
+    if (pTran==1) return SC_TRANSACTION_INVALID;
+    return ((LK_TRANSACTION*)pTran)->State;
+}
+
+
+SC_DATA*  Scif2::GetDataPointerByTranPointer(int TranPointer)
+{
+    if (pSes==0) return 0;
+    LK_TRANSACTION *ptr;
+    ptr = (LK_TRANSACTION *)TranPointer;
+    return (SC_DATA*)&ptr->Data;
+}
+
+
+//=========等待直接命令完成
+int  Scif2::DirectWaitDone(int SIdx, int MaxWaitTime)
+{
+    if (pSes==0) return 0;
+    unsigned int TimePassed;
+    int           DirectCount;
+    if ((SIdx!=-1)&&(SIdx>=pSes->ConnectNum)) return 0;
+    TALK_INFO *pTalk = &pSes->pTalkInfo[SIdx];
+    if (pTalk->ConnState==0) return 0;
+    MainProcess();
+    TimePassed=0;
+    while (1)
+    {
+        MicroSleep(15000);
+        TimePassed+=MainProcess();
+        DirectCount = (pTalk->DirectQueue.WriteAddr-pTalk->DirectQueue.ReadAddr)&DIRECT_ADDR_MASK;
+        if (DirectCount==0) return 1;
+        if (TimePassed>=MaxWaitTime*1000) return 0;
+    }
+}
+
+//==========清除 Queue
+void  Scif2::LoopClearQueue(int SIdx)
+{
+    if (pSes==0) return;
+    unsigned char pt, st, ed;
+    int SenId=SIdx;
+    if ((SenId!=-1)&&(SenId>=pSes->ConnectNum)) return;
+    if   (SenId>=0) { st=SenId; ed=SenId+1; }
+    else            { st=0;         ed=pSes->ConnectNum; }
+    for (pt=st; pt<ed; pt++)
+    {
+        TALK_INFO *pTalk = &pSes->pTalkInfo[pt];
+        pTalk->LoopQueue.WriteAddr=0;
+        pTalk->LoopQueue.ReadAddr=0;
+        pTalk->Section.PkgID+=100;
+    }
+
+}
+
+void  Scif2::DirectClearQueue(int SIdx)
+{
+    if (pSes==0) return;
+    unsigned char pt, st, ed;
+    int SenId=SIdx;
+    if ((SenId!=-1)&&(SenId>=pSes->ConnectNum)) return;
+    if   (SenId>=0) { st=SenId; ed=SenId+1; }
+    else            { st=0;         ed=pSes->ConnectNum; }
+    for (pt=st; pt<ed; pt++)
+    {
+        TALK_INFO *pTalk = &pSes->pTalkInfo[pt];
+        pTalk->DirectQueue.WriteAddr=0;
+        pTalk->DirectQueue.ReadAddr=0;
+        pTalk->Section.PkgID+=100;
+    }
+
+}
+
+//  ============================= Loop ============
+int  Scif2::LoopOWriteN(int SIdx, int addr, int num) {return cmdBitWriteN(SIdx, SC_LOOP, LK_DEV_O, addr, num, 0);}
+int  Scif2::LoopCWriteN(int SIdx, int addr, int num) {return cmdBitWriteN(SIdx, SC_LOOP, LK_DEV_C, addr, num, 0);}
+int  Scif2::LoopSWriteN(int SIdx, int addr, int num) {return cmdBitWriteN(SIdx, SC_LOOP, LK_DEV_S, addr, num, 0);}
+int  Scif2::LoopAWriteN(int SIdx, int addr, int num) {return cmdBitWriteN(SIdx, SC_LOOP, LK_DEV_A, addr, num, 0);}
+int  Scif2::LoopRWriteN(int SIdx, int addr, int num) {return cmdIntWriteN(SIdx, SC_LOOP, LK_DEV_R, addr, num, 0);}
+int  Scif2::LoopFWriteN(int SIdx, int addr, int num) {return cmdFixWriteN(SIdx, SC_LOOP, LK_DEV_F, addr, num, 0);}
+
+int  Scif2::LoopIReadN(int SIdx, int addr, int num) {return cmdBitReadN(SIdx, SC_LOOP, LK_DEV_I, addr, num);}
+int  Scif2::LoopOReadN(int SIdx, int addr, int num) {return cmdBitReadN(SIdx, SC_LOOP, LK_DEV_O, addr, num);}
+int  Scif2::LoopCReadN(int SIdx, int addr, int num) {return cmdBitReadN(SIdx, SC_LOOP, LK_DEV_C, addr, num);}
+int  Scif2::LoopSReadN(int SIdx, int addr, int num) {return cmdBitReadN(SIdx, SC_LOOP, LK_DEV_S, addr, num);}
+int  Scif2::LoopAReadN(int SIdx, int addr, int num) {return cmdBitReadN(SIdx, SC_LOOP, LK_DEV_A, addr, num);}
+int  Scif2::LoopRReadN(int SIdx, int addr, int num ) {return cmdIntReadN(SIdx, SC_LOOP, LK_DEV_R, addr, num);}
+int  Scif2::LoopFReadN(int SIdx, int addr, int num ) {return cmdFixReadN(SIdx, SC_LOOP, LK_DEV_F, addr, num);}
+
+
+//  ============================= Direct ============
+int  Scif2::DirectOWrite1(int SIdx, int addr, int val) {return cmdBitWriteN(SIdx, SC_DIRECT, LK_DEV_O, addr, 1, &val);}
+int  Scif2::DirectCWrite1(int SIdx, int addr, int val) {return cmdBitWriteN(SIdx, SC_DIRECT, LK_DEV_C, addr, 1, &val);}
+int  Scif2::DirectSWrite1(int SIdx, int addr, int val) {return cmdBitWriteN(SIdx, SC_DIRECT, LK_DEV_S, addr, 1, &val);}
+int  Scif2::DirectAWrite1(int SIdx, int addr, int val) {return cmdBitWriteN(SIdx, SC_DIRECT, LK_DEV_A, addr, 1, &val);}
+int  Scif2::DirectRWrite1(int SIdx, int addr, int val) {return cmdIntWriteN(SIdx, SC_DIRECT, LK_DEV_R, addr, 1, &val);}
+int  Scif2::DirectFWrite1(int SIdx, int addr, double val) {return cmdFixWriteN(SIdx, SC_DIRECT, LK_DEV_F, addr, 1, &val);}
+
+int  Scif2::DirectOWriteN(int SIdx, int addr, int num, int *data) {return cmdBitWriteN(SIdx, SC_DIRECT, LK_DEV_O, addr, num, data);}
+int  Scif2::DirectCWriteN(int SIdx, int addr, int num, int *data) {return cmdBitWriteN(SIdx, SC_DIRECT, LK_DEV_C, addr, num, data);}
+int  Scif2::DirectSWriteN(int SIdx, int addr, int num, int *data) {return cmdBitWriteN(SIdx, SC_DIRECT, LK_DEV_S, addr, num, data);}
+int  Scif2::DirectAWriteN(int SIdx, int addr, int num, int *data) {return cmdBitWriteN(SIdx, SC_DIRECT, LK_DEV_A, addr, num, data);}
+int  Scif2::DirectRWriteN(int SIdx, int addr, int num, int *data)    {return cmdIntWriteN(SIdx, SC_DIRECT, LK_DEV_R, addr, num, data);}
+int  Scif2::DirectFWriteN(int SIdx, int addr, int num, double *data) {return cmdFixWriteN(SIdx, SC_DIRECT, LK_DEV_F, addr, num, data);}
+
+int  Scif2::DirectIReadN(int SIdx, int addr, int num) {return cmdBitReadN(SIdx, SC_DIRECT, LK_DEV_I, addr, num);}
+int  Scif2::DirectOReadN(int SIdx, int addr, int num) {return cmdBitReadN(SIdx, SC_DIRECT, LK_DEV_O, addr, num);}
+int  Scif2::DirectCReadN(int SIdx, int addr, int num) {return cmdBitReadN(SIdx, SC_DIRECT, LK_DEV_C, addr, num);}
+int  Scif2::DirectSReadN(int SIdx, int addr, int num) {return cmdBitReadN(SIdx, SC_DIRECT, LK_DEV_S, addr, num);}
+int  Scif2::DirectAReadN(int SIdx, int addr, int num) {return cmdBitReadN(SIdx, SC_DIRECT, LK_DEV_A, addr, num);}
+int  Scif2::DirectRReadN(int SIdx, int addr, int num ) {return cmdIntReadN(SIdx, SC_DIRECT, LK_DEV_R, addr, num);}
+int  Scif2::DirectFReadN(int SIdx, int addr, int num ) {return cmdFixReadN(SIdx, SC_DIRECT, LK_DEV_F, addr, num);}
+
+
+
+
+//------------------------------ StartComboinSet
+void  Scif2::LoopReadCombineStart(int SIdx)
+{
+    if (pSes==0) return;
+    unsigned char pt, st, ed;
+    int SenId = SIdx;
+    if ((SenId!=-1)&&(SenId>=pSes->ConnectNum)) return;
+    if   (SenId>=0) { st=SenId; ed=SIdx+1; }
+    else            { st=0;     ed=pSes->ConnectNum; }
+    for (pt=st; pt<ed; pt++)
+    {
+        TALK_INFO *pTalk = &pSes->pTalkInfo[pt];
+        pTalk->LoopReadCombineFlag=1;
+        pTalk->LoopReadIntNum=0;
+        pTalk->LoopReadFixNum=0;
+    }
+}
+
+//------------------------------ StartComboinSet
+void  Scif2::DirectReadCombineStart(int SIdx)
+{
+    if (pSes==0) return;
+    unsigned char pt, st, ed;
+    int SenId = SIdx;
+    if ((SenId!=-1)&&(SenId>=pSes->ConnectNum)) return;
+    if   (SenId>=0) { st=SenId; ed=SIdx+1; }
+    else            { st=0;     ed=pSes->ConnectNum; }
+    for (pt=st; pt<ed; pt++)
+    {
+        TALK_INFO *pTalk = &pSes->pTalkInfo[pt];
+        pTalk->DirectReadCombineFlag=1;
+        pTalk->DirectReadIntNum=0;
+        pTalk->DirectReadFixNum=0;
+    }
+}
+
+
+//------------------------------ FinishComboinSet
+int  Scif2::LoopReadCombineFinish(int SIdx)
+{
+    if (pSes==0) return 0;
+    unsigned char pt, st, ed;
+    int pTran=0;
+
+    int SenId = SIdx;
+    if ((SenId!=-1)&&(SenId>=pSes->ConnectNum)) return 0;
+    if   (SenId>=0) { st=SenId; ed=SIdx+1; }
+    else            { st=0;     ed=pSes->ConnectNum; }
+    for (pt=st; pt<ed; pt++)
+    {
+        int num, k;
+        TALK_INFO *pTalk = &pSes->pTalkInfo[pt];
+        pTalk->LoopReadCombineFlag=0;
+        //-----loop read Reg
+        k=0;
+        while (pTalk->LoopReadIntNum>0)
+        {
+            if (pTalk->LoopReadIntNum>MAX_CB_INT_NUM) num=MAX_CB_INT_NUM;
+            else                                         num=pTalk->LoopReadIntNum;
+            pTran = CombineIntRead(pt, 0, num, k);
+            k+=num;
+            pTalk->LoopReadIntNum-=num;
+        }
+        //-----loop read Fix
+        k=0;
+        while (pTalk->LoopReadFixNum>0)
+        {
+            if (pTalk->LoopReadFixNum>MAX_CB_FIX_NUM) num=MAX_CB_FIX_NUM;
+            else                                    num=pTalk->LoopReadFixNum;
+            pTran = CombineFixRead(pt, 0, num, k);
+            k+=num;
+            pTalk->LoopReadFixNum-=num;
+        }
+    }
+    return pTran;
+}
+
+
+//------------------------------ FinishComboinSet
+int  Scif2::DirectReadCombineFinish(int SIdx)
+{
+    if (pSes==0) return 0;
+    unsigned char pt, st, ed;
+    int pTran=0;
+
+    int SenId = SIdx;
+    if ((SenId!=-1)&&(SenId>=pSes->ConnectNum)) return 0;
+    if   (SenId>=0) { st=SenId; ed=SIdx+1; }
+    else            { st=0;     ed=pSes->ConnectNum; }
+    for (pt=st; pt<ed; pt++)
+    {
+        int num, k;
+        TALK_INFO *pTalk = &pSes->pTalkInfo[pt];
+        pTalk->DirectReadCombineFlag=0;
+        //-----direct read Reg
+        k=0;
+        while (pTalk->DirectReadIntNum>0)
+        {
+            if (pTalk->DirectReadIntNum>MAX_CB_INT_NUM) num=MAX_CB_INT_NUM;
+            else                                        num=pTalk->DirectReadIntNum;
+            pTran = CombineIntRead(pt, 1, num, k);
+            k+=num;
+            pTalk->DirectReadIntNum-=num;
+        }
+        //-----direct read Fix
+        k=0;
+        while (pTalk->DirectReadFixNum>0)
+        {
+            if (pTalk->DirectReadFixNum>MAX_CB_FIX_NUM) num=MAX_CB_FIX_NUM;
+            else                                    num=pTalk->DirectReadFixNum;
+            pTran = CombineFixRead(pt, 1, num, k);
+            k+=num;
+            pTalk->DirectReadFixNum-=num;
+        }
+    }
+    return pTran;
+}
+
+//------------------------------
+void  Scif2::LoopWriteCombineStart(int SIdx)
+{
+    if (pSes==0) return;
+    unsigned char pt, st, ed;
+    int SenId = SIdx;
+    if ((SenId!=-1)&&(SenId>=pSes->ConnectNum)) return;
+    if   (SenId>=0) { st=SenId; ed=SIdx+1; }
+    else            { st=0;     ed=pSes->ConnectNum; }
+    for (pt=st; pt<ed; pt++)
+    {
+        TALK_INFO *pTalk = &pSes->pTalkInfo[pt];
+        pTalk->LoopWriteCombineFlag=1;
+        pTalk->LoopWriteIntNum=0;
+        pTalk->LoopWriteFixNum=0;
+    }
+}
+//------------------------------
+void  Scif2::DirectWriteCombineStart(int SIdx)
+{
+    if (pSes==0) return;
+    unsigned char pt, st, ed;
+    int SenId = SIdx;
+    if ((SenId!=-1)&&(SenId>=pSes->ConnectNum)) return;
+    if   (SenId>=0) { st=SenId; ed=SIdx+1; }
+    else            { st=0;     ed=pSes->ConnectNum; }
+    for (pt=st; pt<ed; pt++)
+    {
+        TALK_INFO *pTalk = &pSes->pTalkInfo[pt];
+        pTalk->DirectWriteCombineFlag=1;
+        pTalk->DirectWriteIntNum=0;
+        pTalk->DirectWriteFixNum=0;
+    }
+}
+
+//------------------------------
+int  Scif2::LoopWriteCombineFinish(int SIdx)
+{
+    if (pSes==0) return 0;
+    unsigned char pt, st, ed;
+    int pTran=0;
+
+    int SenId = SIdx;
+    if ((SenId!=-1)&&(SenId>=pSes->ConnectNum)) return 0;
+    if   (SenId>=0) { st=SenId; ed=SIdx+1; }
+    else            { st=0;     ed=pSes->ConnectNum; }
+    for (pt=st; pt<ed; pt++)
+    {
+        int num, k;
+        TALK_INFO *pTalk = &pSes->pTalkInfo[pt];
+        pTalk->LoopWriteCombineFlag=0;
+        //-----loop write Reg
+        k=0;
+        while (pTalk->LoopWriteIntNum>0)
+        {
+            if (pTalk->LoopWriteIntNum>MAX_CB_INT_NUM) num=MAX_CB_INT_NUM;
+            else                                          num=pTalk->LoopWriteIntNum;
+            pTran = CombineIntWrite(pt, 0, num, k);
+            k+=num;
+            pTalk->LoopWriteIntNum-=num;
+        }
+        //-----loop write Fix
+        k=0;
+        while (pTalk->LoopWriteFixNum>0)
+        {
+            if (pTalk->LoopWriteFixNum>MAX_CB_FIX_NUM) num=MAX_CB_FIX_NUM;
+            else                                          num=pTalk->LoopWriteFixNum;
+            pTran = CombineFixWrite(pt, 0, num, k);
+            k+=num;
+            pTalk->LoopWriteFixNum-=num;
+        }
+    }
+    return pTran;
+}
+
+
+//------------------------------
+int  Scif2::DirectWriteCombineFinish(int SIdx)
+{
+    if (pSes==0) return 0;
+    unsigned char pt, st, ed;
+    int pTran=0;
+
+    int SenId = SIdx;
+    if ((SenId!=-1)&&(SenId>=pSes->ConnectNum)) return 0;
+    if   (SenId>=0) { st=SenId; ed=SIdx+1; }
+    else            { st=0;     ed=pSes->ConnectNum; }
+    for (pt=st; pt<ed; pt++)
+    {
+        int num, k;
+        TALK_INFO *pTalk = &pSes->pTalkInfo[pt];
+        pTalk->DirectWriteCombineFlag=0;
+        //-----direct write Reg
+        k=0;
+        while (pTalk->DirectWriteIntNum>0)
+        {
+            if (pTalk->DirectWriteIntNum>MAX_CB_INT_NUM) num=MAX_CB_INT_NUM;
+            else                                         num=pTalk->DirectWriteIntNum;
+            pTran = CombineIntWrite(pt, 1, num, k);
+            k+=num;
+            pTalk->DirectWriteIntNum-=num;
+        }
+        //-----direct write Fix
+        k=0;
+        while (pTalk->DirectWriteFixNum>0)
+        {
+            if (pTalk->DirectWriteFixNum>MAX_CB_FIX_NUM) num=MAX_CB_FIX_NUM;
+            else                                         num=pTalk->DirectWriteFixNum;
+            pTran = CombineFixWrite(pt, 1, num, k);
+            k+=num;
+            pTalk->DirectWriteFixNum-=num;
+        }
+    }
+    return pTran;
+}
+
+
+
+//==============================================================================
+
+//---------字串寫入
+int  Scif2::DirectRWriteString(int SIdx,  int addr, int BufSize, char *Buf)
+{
+    if (pSes==0) return 0;
+    int SenId = SIdx;
+    if ((SenId<0)||(SenId>=pSes->ConnectNum)) return 0;
+    int i, num, ZeroAppeared;
+    char tmpBuf[100];
+    num = ((BufSize-1)>>2)+1;
+    if (BufSize>100) BufSize=100;
+    ZeroAppeared=0;
+    for (i=0; i<BufSize; i++)
+    {
+        if (ZeroAppeared) tmpBuf[i]=0;
+        else              tmpBuf[i]=Buf[i];
+        if (Buf[i]==0) ZeroAppeared=1;
+    }
+    return cmdIntWriteN(SIdx, SC_DIRECT, LK_DEV_R, addr, num, (int *)tmpBuf);
+}
+
+//--------寫入 RBit
+int  Scif2::DirectRWrite1Bit(int SIdx, int addr, int BitIdx, int BitValue)
+{
+    if (pSes==0) return 0;
+    unsigned char pt, st, ed;
+    int rt;
+    int SenId = SIdx;
+    if ((SenId!=-1)&&(SenId>=pSes->ConnectNum)) return 0;
+    if   (SenId>=0) { st=SenId; ed=SIdx+1; }
+    else            { st=0;     ed=pSes->ConnectNum; }
+    for (pt=st; pt<ed; pt++)
+    {
+        int data = (BitIdx<<1)|(BitValue&0x01);
+        rt = cmdBitWriteN(pt, SC_DIRECT, LK_DEV_RBIT, addr, 1, &data);
+    }
+    return rt;
+}
+
+
+
+//======================= MainProcess ========================================
+int Scif2::MainProcess()
+{
+    static LK_TIME ts, te, td;
+    static unsigned int TimePass=0;
+
+    unsigned int tdiff;
+    int i, RxLen;
+    unsigned char RxBuf[MAX_PACKET_SIZE];
+    //---接收用的
+#ifdef __QT
+    QHostAddress       RemoteAddr;
+    quint16            RemotePort;
+#else
+    struct sockaddr_in src_addr;	// controller address information
+#endif
+
+    //計算經過的時間
+    getTime(&te);
+    getTimeDiff(&td, &te, &ts);
+    tdiff=td.Sec*1000000+td.uSec;
+    memcpy(&ts, &te, sizeof(LK_TIME));
+
+
+
+    if (pSes==0) return tdiff;
+
+    //程式計數器
+    TimePass+=tdiff;
+    if (TimePass>=1000000)
+    {
+        TimePass=0;
+        pSes->ProcCounter++;
+    }
+
+    //=======================檢查 Talk 是否有動作要求
+    for (i=0; i<pSes->ConnectNum; i++)
+    {
+        TALK_INFO *pTalk = &pSes->pTalkInfo[i];
+        //------------------
+        switch (pTalk->Action)
+        {
+        case CONNECT_ACTION_TO_CONNECT:
+            pTalk->Action=CONNECT_ACTION_IDLE;
+            ResetTalk(pTalk);
+            LocalConnect(pTalk);
+            break;
+        case CONNECT_ACTION_TO_DISCONNECT:
+            pTalk->Action=CONNECT_ACTION_IDLE;
+            if (pTalk->ConnState!=SC_CONN_STATE_DISCONNECT)
+            {
+                TalkDisconnect(pTalk);
+            }
+            break;
+        default:
+            break;
+        }
+
+        //============檢查有無需要接收的 Talk�
+    #ifdef __QT�息
+        if ((pTalk->Sck!=NULL)&&(pTalk->ConnState!=SC_CONN_STATE_DISCONNECT))
+    #else
+        if ((*pTalk->Sck!=-1)&&(pTalk->ConnState!=SC_CONN_STATE_DISCONNECT))
+    #endif
+        {
+            //======AliveRxTime 超過 2 秒，重新歸零，如果不是在連線中，則重新連線
+            if (FtpIndex==255) pTalk->AliveRxTime+=tdiff;
+            if (pTalk->AliveRxTime>3000000)
+            {
+                pTalk->AliveRxTime = 0;
+                //if (pTalk->ConnState!=SC_CONN_STATE_CONNECTING)
+                if (pTalk->ConnState!=SC_CONN_STATE_CONNECTING)
+                {
+                    ReConnect(pTalk);
+                    pTalk->TalkWaiting = 0;
+                    pTalk->ConnState = SC_CONN_STATE_NORESPONSE;
+                }
+            }
+            //======每0.5秒鐘送出 Alive 訊息
+            pTalk->AliveTxTime+=tdiff;
+            if (pTalk->AliveTxTime>1000000)
+            {
+                pTalk->AliveTxTime = 0;
+                if ((pTalk->ConnState==SC_CONN_STATE_NORESPONSE)
+                   ||(pTalk->ConnState==SC_CONN_STATE_OK))
+                {
+                    pTalk->AliveBuf[0] = START_CHAR_ALIVE;
+                    WriteOutMessage(pTalk, (char *)pTalk->AliveBuf, 10);
+                }
+            }
+            //接收所有傳入的訊息
+            while (1)
+            {
+                unsigned Valid = 0;
+            #ifdef __QT
+                RxLen = pTalk->Sck->readDatagram((char *)RxBuf, MAX_PACKET_SIZE, &RemoteAddr, &RemotePort);
+                if (RxLen<=0) break;
+                if ((RemoteAddr.toIPv4Address()==pTalk->ReconAddr.toIPv4Address())
+                   && (RemotePort==PORT_UDP_RECON ))
+                    Valid = 1;
+            #else
+                int adlen;
+                RxLen = recvfrom(*pTalk->Sck, (char *)RxBuf, MAX_PACKET_SIZE, 0, (struct sockaddr *)&src_addr, &adlen);
+                if (RxLen<=0) break;
+                unsigned long CurrentIPLong = src_addr.sin_addr.s_addr;
+                unsigned int  CurrentPort   = ntohs(src_addr.sin_port);
+                if ( (CurrentIPLong==pTalk->ReconAddr.sin_addr.s_addr)
+                   && (CurrentPort==ntohs(pTalk->ReconAddr.sin_port)) )
+                    Valid = 1;
+            #endif
+                //檢查起始位元
+                if (Valid)
+                {
+                    //======呼叫對應的處理函式=====================
+                    switch (RxBuf[0])
+                    {
+                    case START_CHAR_TALK:
+                    case START_CHAR_TALK_GROUP:
+                        ReceiveTalk(pTalk, RxLen, RxBuf);
+                        Valid = 2;
+                        break;
+                    case START_CHAR_CONNECT:
+                    case START_CHAR_ADMIN:
+                        ReceiveConnect(pTalk, RxLen, RxBuf);
+                        if (pTalk->ConnectResponse==CONNECT_RESULT_SOFTWARE_CONNECTED) Valid = 2;
+                        break;
+                    case START_CHAR_ALIVE:
+                        Valid = 2;
+                        break;
+                    case START_CHAR_FTP:
+                        if (pTalk==(&pSes->pTalkInfo[pSes->FtpTalkIdx])) ReceiveFtp(&pSes->FtpInfo, RxLen, RxBuf);
+                        Valid = 2;
+                        break;
+                    case START_CHAR_MEDIA:
+                        ReceiveConnect(pTalk, RxLen, RxBuf);
+                        Valid = 1;
+                        break;
+                    default:
+                        Valid = 0;
+                        break;
+                    }
+                    if (Valid==2)
+                    {
+                        pTalk->AliveRxTime = 0;
+                        pTalk->AliveTxTime = 0;
+                        //====20111021 ===復原下面這一行========
+                        if (pTalk->ConnState!=SC_CONN_STATE_CONNECTING)
+                        {
+                            pTalk->ConnState = SC_CONN_STATE_OK;
+                        }
+                    }
+                }
+            }
+        }
+        //======定期呼叫 Talk
+        RegularCallTalk(pTalk, tdiff);
+        //======定期呼叫 Connect
+        RegularCallConnect(pTalk, tdiff);
+    }
+    //======================================================================
+
+
+
+    //===================================檢查 FTP 是否有動作要求
+    switch (pSes->FtpInfo.Action)
+    {
+    //檔案傳輸功能
+    case FTP_ACTION_TO_UPLOAD_FILE:
+        pSes->FtpInfo.Action=FTP_ACTION_IDLE;
+        SetUploadFile(&pSes->FtpInfo);
+        break;
+    case FTP_ACTION_TO_DOWNLOAD_FILE:
+        pSes->FtpInfo.Action=FTP_ACTION_IDLE;
+        SetDownloadFile(&pSes->FtpInfo);
+        break;
+    case FTP_ACTION_TO_DELETE_FILE:
+        pSes->FtpInfo.Action=FTP_ACTION_IDLE;
+        SetDeleteFile(&pSes->FtpInfo);
+        break;
+    case FTP_ACTION_TO_LIST_FILE:
+        pSes->FtpInfo.Action=FTP_ACTION_IDLE;
+        SetListFile(&pSes->FtpInfo);
+        break;
+    case FTP_ACTION_TO_UPLOAD_FILES:
+        pSes->FtpInfo.Action=FTP_ACTION_IDLE;
+        SetUploadFiles(&pSes->FtpInfo);
+        break;
+    case FTP_ACTION_TO_DOWNLOAD_FILES:
+        pSes->FtpInfo.Action=FTP_ACTION_IDLE;
+        SetDownloadFiles(&pSes->FtpInfo);
+        break;
+    case FTP_ACTION_TO_DELETE_FILES:
+        pSes->FtpInfo.Action=FTP_ACTION_IDLE;
+        SetDeleteFiles(&pSes->FtpInfo);
+        break;
+    case FTP_ACTION_TO_MAKE_DIR:
+        pSes->FtpInfo.Action=FTP_ACTION_IDLE;
+        SetMakeDir(&pSes->FtpInfo);
+        break;
+    default:
+        break;
+    }
+    //======定期呼叫 Ftp
+    RegularCallFtp(&pSes->FtpInfo, tdiff);
+    //======================================================================
+    return 0;
+}
+//=====================================Detect ================================
+
+
+
+
+//======與取得的控制器清單中的Index值進行連線
+int  Scif2::ConnectLocalList(int SIdx, int Index)
+{
+    if (pSes==0) return 0;
+
+    if (Index >= pSes->LocalInfo.Count) return 0;
+    int SenId = SIdx;
+
+    if ((SenId<0)||(SenId>=pSes->ConnectNum)) return 0;
+    TALK_INFO *pTalk = &pSes->pTalkInfo[SenId];
+    //pTalk->ConnectIndex = Index;
+#ifdef __QT
+    pTalk->ReconAddr.setAddress(pSes->LocalInfo.Hosts[Index].IPLong);
+#else
+    pTalk->ReconAddr.sin_family = AF_INET;
+    pTalk->ReconAddr.sin_addr.s_addr = inet_addr(pSes->LocalInfo.Hosts[Index].IP);
+    pTalk->ReconAddr.sin_port = htons(PORT_UDP_RECON);	  // short, network byte order
+    memset(&(pTalk->ReconAddr.sin_zero), '\0', 8); // zero the rest of the struct
+#endif
+    pTalk->Action=CONNECT_ACTION_TO_CONNECT;
+
+    //printf("ConnectLocalList Finished\n");
+    return 1;
+}
+
+
+
+//讀取取得的控制器資料筆數
+int  Scif2::LocalReadControllerCount()
+{
+    if (pSes==0) return 0;
+    return pSes->LocalInfo.Count;
+}
+
+//讀取取得的控制器資料
+int  Scif2::LocalReadController(int Index, LOCAL_CONTROLLER_INFO *Info)
+{
+    if (pSes==0) return 0;
+    if (Index<pSes->LocalInfo.Count)
+    {
+        memcpy(Info, &pSes->LocalInfo.Hosts[Index], sizeof(LOCAL_CONTROLLER_INFO));
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+
+#define MAXBUFLEN 32
+
+int  Scif2::LocalDetectControllers()
+{
+#ifdef __QT
+    if (pSes==0) return 0;
+    char ReqCh='?';
+    int RxLen;
+    unsigned char RxBuf[MAXBUFLEN];
+    unsigned char TxBuf[3];
+    QString tmpStr;
+
+    TxBuf[0]=ReqCh;
+    MainSocket->writeDatagram((char *)TxBuf, 1, QHostAddress::Broadcast, PORT_UDP_REPLY);
+
+    //接收
+    pSes->LocalInfo.Count=0;
+    unsigned short tick;
+    tick=0;
+    QHostAddress       RemoteAddr;
+    quint16            RemotePort;
+    while (1)
+    {
+        usleep(10000);
+        while (1)
+        {
+            RxLen = MainSocket->readDatagram((char *)RxBuf, MAXBUFLEN, &RemoteAddr, &RemotePort);
+            if ((RxLen==16)||(RxLen==32))
+            {
+                if (RemotePort==PORT_UDP_REPLY)
+                {
+                    unsigned char j;
+                    unsigned char Repeat=0;
+                    for (j=0; j<pSes->LocalInfo.Count; j++)
+                    {
+                        if (pSes->LocalInfo.Hosts[j].IPLong==RemoteAddr.toIPv4Address())
+                        {
+                            Repeat=1;
+                            break;
+                        }
+                    }
+                    if (!Repeat)
+                    {
+                        uint IPLong=RemoteAddr.toIPv4Address();
+                        pSes->LocalInfo.Hosts[pSes->LocalInfo.Count].IPLong=IPLong;
+                        sprintf(pSes->LocalInfo.Hosts[pSes->LocalInfo.Count].IP, "%d.%d.%d.%d", (IPLong>>24)&0xff, (IPLong>>16)&0xff, (IPLong>>8)&0xff, (IPLong>>0)&0xff);
+                        memcpy(pSes->LocalInfo.Hosts[pSes->LocalInfo.Count].Name, RxBuf, RxLen);
+                        pSes->LocalInfo.Count++;
+                        if (pSes->LocalInfo.Count>=MAX_CONTROLLER_NUM_PER_MAKER) break;
+                    }
+                }
+            }
+            else break;
+        }
+        tick++;
+        if (tick>40) break;
+    }
+    return pSes->LocalInfo.Count;
+#endif
+#ifdef __BCB
+    if (pSes==0) return 0;
+    struct sockaddr_in my_addr;	   // my address information
+    struct sockaddr_in BroadCast_addr; // connector's address information
+    struct sockaddr_in their_addr; // connector's address information
+    char ReqCh='?';
+    int fd;
+    int RxLen, TxLen;
+    unsigned char RxBuf[MAXBUFLEN];
+    unsigned char TxBuf[3];
+    char cOn=1;
+    unsigned long on=1;
+    int ret;
+    char *addr;
+    int adlen;
+    if (!initWinsock())
+    {
+        printf("[PD] unable to initWinsock. \n");
+        return -1;
+    }
+    adlen = sizeof(struct sockaddr);
+    char ThisIPs[16][16];
+    unsigned char ThisIPcount=0;
+    unsigned char i;
+    //===============��������IP
+    hostent *hent;
+    char    s[128];
+    char    *p1;
+    char    *p2;
+    gethostname(s,   128);        //Get   the   computer   name
+    hent =   gethostbyname(s);
+    //printf("[PD] %s \n", hent->h_name);   //Get   the   IpAddress
+    for (i=0; i < hent->h_length; i++)
+    {
+        p1=hent->h_addr_list[i];
+        if (p1==NULL) break;
+        p2 = inet_ntoa( *((in_addr*)hent->h_addr_list[i]));
+        memcpy(ThisIPs[ThisIPcount], p2, 16);
+        ThisIPcount++;
+    }
+
+    pSes->LocalInfo.Count=0;
+    for (i=0; i<ThisIPcount; i++)
+    {
+        printf("[PD] Scan for IP %s \n", ThisIPs[i]);
+        if ((fd = (int)socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+        {
+            printf("  [PD] unable to create socket. \n");
+            return -1;
+        }
+        printf("  [PD] socket built\n");
+
+        //==============bind ========
+        my_addr.sin_family = AF_INET;		  // host byte order
+        my_addr.sin_addr.s_addr = inet_addr(ThisIPs[i]);
+        //my_addr.sin_addr.s_addr = INADDR_ANY;
+        my_addr.sin_port = htons(0);	  // short, network byte order
+        memset(&(my_addr.sin_zero), '\0', 8); // zero the rest of the struct
+        if (bind(fd, (struct sockaddr *)&my_addr, adlen) == -1)
+        {
+            printf("  [PD] unable to bind. \n");
+            closesocket(fd);
+            return -1;
+        }
+        unsigned short portshort=ntohs(my_addr.sin_port);
+        printf("  [PD] Address Binded, port=%d.\n", portshort);
+
+        //============�]�w���s���Ҧ�
+        ret = setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &cOn, sizeof(cOn) );
+        //================�]�� non blocking mode==============
+        if (ioctlsocket(fd, FIONBIO, &on) == SOCKET_ERROR)
+        {
+            printf("  [PD] Unable to set nonblocking mode. \n");
+            closesocket(fd);
+            fd = -1;
+            return -1;
+        }
+        //================== set up destination address
+        BroadCast_addr.sin_family = AF_INET;
+        BroadCast_addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+        //BroadCast_addr.sin_port=htons(PORT_UDP_CONTROLLER);
+        BroadCast_addr.sin_port=htons(PORT_UDP_REPLY);
+        memset(&(BroadCast_addr.sin_zero), '\0', 8); // zero the rest of the struct
+
+        //�ǰe
+        printf("  [PD] Send detect packet\n");
+        TxBuf[0]=ReqCh;
+
+        TxLen=sendto( fd, (char *)TxBuf, 1, 0, (struct sockaddr *)&BroadCast_addr, adlen);
+        if ( TxLen<0)
+        {
+            printf("  [PD] Detect packet sent faild.\n");
+            closesocket(fd);
+            return -1;
+        }
+
+        //����
+        unsigned short tick;
+        tick=0;
+        printf("  [PD] Check reply packet\n");
+        while (1)
+        {
+            Sleep(10);
+            RxLen = recvfrom(fd, (char *)RxBuf, MAXBUFLEN , 0, (struct sockaddr *)&their_addr, &adlen);
+            if (ntohs(their_addr.sin_port)==PORT_UDP_REPLY)
+            {
+                if ((RxLen==16)||(RxLen==32))
+                {
+                    unsigned char j;
+                    unsigned char Repeat=0;
+                    unsigned int ll;
+                    ll=their_addr.sin_addr.s_addr ;
+                    //ll=inet_addr(inet_ntoa(their_addr.sin_addr));
+                    for (j=0; j<pSes->LocalInfo.Count; j++)
+                    {
+                        if (pSes->LocalInfo.Hosts[j].IPLong==ll)
+                        {
+                            Repeat=1;
+                            break;
+                        }
+                    }
+                    if (!Repeat)
+                    {
+                        pSes->LocalInfo.Hosts[pSes->LocalInfo.Count].IPLong=ll;
+                        addr=(char *)inet_ntoa(their_addr.sin_addr);
+                        memcpy(pSes->LocalInfo.Hosts[pSes->LocalInfo.Count].IP, addr, 16);
+                        memcpy(pSes->LocalInfo.Hosts[pSes->LocalInfo.Count].Name, RxBuf, RxLen);
+                        pSes->LocalInfo.Count++;
+                        if (pSes->LocalInfo.Count>=MAX_CONTROLLER_NUM_PER_MAKER) break;
+                    }
+                    printf("  [PD] From %s, size=%d \n", inet_ntoa(their_addr.sin_addr), RxLen);
+                }
+            }
+            tick++;
+            if (tick>40) break;
+        }
+        closesocket(fd);
+    }
+    return pSes->LocalInfo.Count;
+#endif
+}
+
+
+
+
+
+//=======================================================
+
+#ifdef __QT
+    //===============================記錄錯誤
+    void ClosePort(QUdpSocket *pSck)
+    {
+        pSck->close();
+    }
+
+    bool OpenPort(QUdpSocket *pSck)
+    {
+    }
+#else
+    //===============================記錄錯誤
+    void ClosePort(int *pSck)
+    {
+        if (*pSck!=-1) closesocket(*pSck);
+        *pSck=-1;
+    }
+    //----------------------------------
+    bool OpenPort(int *pSck)
+    {
+        *pSck = socket(AF_INET, SOCK_DGRAM, 0);
+        if (*pSck == -1)
+        {
+            printf("[UR] open socket failed.\n");
+            return false;
+        }
+        //----bind
+        struct sockaddr_in my_addr;	   // my address information
+        my_addr.sin_family = AF_INET;		  // host byte order
+        my_addr.sin_addr.s_addr = INADDR_ANY;
+        my_addr.sin_port = htons(0);	  // short, network byte order
+
+        memset(&(my_addr.sin_zero), '\0', 8); // zero the rest of the struct
+        if (bind(*pSck, (struct sockaddr *)&my_addr, sizeof(my_addr)) == -1)
+        {
+            printf("[UR] Error binding socket.\n");
+            return false;
+        }
+
+        //----�]�� non blocking mode
+        unsigned long on=1;
+        if (ioctlsocket(*pSck, FIONBIO, &on) == SOCKET_ERROR)
+        {
+            printf("  [UR] Unable to set nonblocking mode. \n");
+            closesocket(*pSck);
+            *pSck = -1;
+            return false;
+        }
+
+        printf("[UR] Address %s:%d Binded.\n", inet_ntoa(my_addr.sin_addr), ntohs(my_addr.sin_port) );
+        return true;
+    }
+#endif
+
+
+//===============================記錄錯誤
+void LogTalkError(TALK_INFO *pTalk, int Type)
+{
+    pTalk->ErrRec.Type=Type;
+    if (pTalk->pTran!=0)
+    {
+        pTalk->ErrRec.Cmd=pTalk->pTran->Cmd;
+        pTalk->ErrRec.addr=pTalk->pTran->Target[0].Addr;
+        pTalk->ErrRec.num=pTalk->pTran->Num;
+        pTalk->ErrRec.Error=pTalk->pTran->ErrCode;
+
+        /*
+        if (pTalk->QueueFrom==0)
+            printf("[PT] DefaultQueue Cmd Err=%02x, Cmd=%d, num=%d, Addr=%d \n", pTalk->ErrRec.Error, pTalk->ErrRec.Cmd, pTalk->ErrRec.num, pTalk->ErrRec.addr);
+        else
+        */
+        if (pTalk->QueueFrom==0)
+            printf("[PT] PollingQueue Err=%02x, Cmd=%d, num=%d, Addr=%d \n", pTalk->ErrRec.Error, pTalk->ErrRec.Cmd, pTalk->ErrRec.num, pTalk->ErrRec.addr);
+        else if (pTalk->QueueFrom==1)
+            printf("[PT] DirectQueue Err=%02x, Cmd=%d, num=%d, Addr=%d \n", pTalk->ErrRec.Error, pTalk->ErrRec.Cmd, pTalk->ErrRec.num, pTalk->ErrRec.addr);
+        pTalk->pTran->Cancelled++;
+    }
+    else
+    {
+        pTalk->ErrRec.Cmd=0x99;
+        pTalk->ErrRec.addr=0;
+        pTalk->ErrRec.num=0;
+        pTalk->ErrRec.Error=0x99;
+    }
+}
+
+
+
+
+
+#ifdef __HAVE_STRING
+//-------------產生功能字串
+int  GenerateFunctionString(FUNCTION_SETTING *pFuncs, char *FuncString)
+{
+    //if (pSes==0) return 0;
+    unsigned int Key=0x788812BF;
+    unsigned char n = sizeof(FUNCTION_SETTING);
+    unsigned char InBuf[100], OutBuf[100];
+    unsigned int i;
+    memcpy(InBuf, (unsigned char *)pFuncs, n);
+    CrcEncrypt_adv(Key, InBuf, OutBuf, n);
+    for (i=0; i<n+4; i++) ByteToHex(OutBuf[i], FuncString+i*2);
+    FuncString[(n+4)*2]=0;
+    return 1;
+}
+//==============================================================================
+#endif
+
+
+
+
+
+
+
+
+
+
+
+
+
+

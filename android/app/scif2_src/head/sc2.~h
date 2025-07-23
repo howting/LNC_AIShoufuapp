@@ -1,0 +1,158 @@
+#ifndef SC2_H
+#define SC2_H
+                 
+#include "sc2_global.h"
+#include "scif2_define.h"
+
+class SCIF2SHARED_EXPORT SC2
+{
+private:
+
+
+
+public:
+    SC2();
+    //=================== 通訊執行函式，應該每10~100ms呼叫一次 ======================
+    int  MainProcess();
+    //=================== 設定除錯等級 ===================    
+    void  SetDebug (int level);   //level : 0不顯示   1有錯誤才顯示   2通訊內容全部顯示(除錯用，通訊速度變成每秒一次)
+    //=================== 初始化 與 終結 共用記憶體 ======================
+    int   Init    (DLL_USE_SETTING *pUseSetting, int MakerID, const char EncString[]);
+    void  Destroy ();
+    void  SetTalkSoftwareType (int SIdx, int SoftwareType);
+
+    //===================區域網路中偵測主機功能=====================================
+     int  LocalDetectControllers ();                                    //自動偵測主機功能
+     int  LocalReadControllerCount ();                                  //讀取取得的控制器資料筆數
+     int  LocalReadController (int Index, LOCAL_CONTROLLER_INFO *Info); //讀取取得的控制器資料
+     int  ConnectLocalList (int SIdx, int Index);                       //與取得的控制器清單中的Index值進行連線
+
+    //==================================連線功能=================================
+#ifdef __QT
+     int  ConnectLocalIP (int SIdx, QString IP);   //直接輸入控制器IP進行連線
+#else
+     int  ConnectLocalIP (int SIdx, char* IP);   //直接輸入控制器IP進行連線
+#endif
+     int  Disconnect (int SIdx);                   //中斷連線
+     int  SetConnectPwd (int SIdx, char *Pwd);     //設定連線密碼
+
+    //==================================檔案傳輸功能=================================
+     int  FtpSetTalk (int SIdx);                                                              //設定 FTP 索引
+     int  FtpUploadFile (int Folder, char *SubFolder, char *Filename, char *LocalFilename);   //上傳檔案
+     int  FtpDownloadFile (int Folder, char *SubFolder, char *Filename, char *LocalFilename); //下載檔案
+     int  FtpDeleteFile (int Folder, char *SubFolder, char *Filename);                        //刪除檔案
+     int  FtpUploadFiles (int Count, FTP_TRANFER_FILE *TransferFiles);                        //上傳檔案 -- 多個
+     int  FtpDownloadFiles (int Count, FTP_TRANFER_FILE *TransferFiles);                      //下載檔案 -- 多個
+     int  FtpDeleteFiles (int Count, FTP_TRANFER_FILE *TransferFiles);                        //刪除檔案 -- 多個
+     int  FtpCheckDone ();                                             //取得執行結果
+    //==================================增加幾個函式，方便 C# 使用
+     int  FtpTransferFileReset ();
+     int  FtpTransferFileAdd (int Folder, char *SubFolder, char *Filename, char *LocalFilename);
+     int  FtpUploadFiles2 ();
+     int  FtpDownloadFiles2 ();
+     int  FtpDeleteFiles2 ();
+
+    //==================================遠端檔案清單    
+     int  FtpMakeDir (int Folder, char *DirName);                                             //建立資料夾
+     int  FtpGetFileList (int Folder, char *SubFolder, char *HeadFilter, char *TailFilter);   //取得檔案清單
+     int  FtpReadFileCount ();                                                                //讀取FTP檔案清單筆數
+     int  FtpReadFile (int Index, FTP_FILE *file);                                            //讀取FTP檔案名稱
+
+    //==================================本地端檔案清單
+     int  FileGetFileList (char *Path, char *HeadFilter, char *TailFilter);  //取得本地端檔案清單
+     int  FileReadFileCount ();                                              //讀取本地檔案清單筆數
+     int  FileReadFile (int Index, FTP_FILE *file);                          //讀取本地檔案名稱
+     int  FileDeleteFile (int Index);                                        //刪除本地檔案名稱
+
+    //--==========================取得內部資訊 =================================    
+     int   GetCommonMsg (int id );                   //取得一般的資訊
+     int   GetTalkMsg (int SIdx, int MsgID);         //取得連線通訊的資訊
+     void  GetTalkError (int SIdx, ERROR_MSG *Msg);  //取得錯誤訊息
+
+    //============================= 取得通訊處理狀態
+    int       GetTranState (int pTran);
+    SC_DATA*  GetDataPointerByTranPointer (int TranPointer);
+
+    //====================== 由本地記憶體讀取資料
+     int  memI (int SIdx, int addr );
+     int  memO (int SIdx, int addr );
+     int  memC (int SIdx, int addr );
+     int  memS (int SIdx, int addr );
+     int  memA (int SIdx, int addr );
+     int  memR (int SIdx, int addr );
+     int  memRString (int SIdx, int addr, int RSize, char *Buf );           //由鏡射記憶體中讀取字串
+     double memF (int SIdx, int addr );
+
+     //====================== 寫入本地記憶體
+      int  memSetO (int SIdx, int addr, char val);
+      int  memSetC (int SIdx, int addr, char val);
+      int  memSetS (int SIdx, int addr, char val);
+      int  memSetA (int SIdx, int addr, char val);
+      int  memSetR (int SIdx, int addr, int val);
+      int  memSetRString (int SIdx, int addr, int RSize, char *Buf );           //由鏡射記憶體中讀取字串
+      int  memSetF (int SIdx, int addr, double val);
+
+
+    // ========================================================
+    //以下函式回傳值若為 0 ，代表指令初拒絕，若不為 0 ，代表是該筆通訊的指標
+    //此時，將其帶入 GetTranState 的引數中，取得該筆通訊的狀態，將會是 SC_TRANSACTION_RESET
+    //一段時間之後再帶入 GetTranState 的引數中，回傳值若為 SC_TRANSACTION_FINISH 代表該筆通訊已被處理
+    void LoopClearQueue (int SIdx);             //清除命令
+    //  ============================= Loop read ============
+    void LoopReadCombineStart (int SIdx);        //設定自動組合旗標
+    int  LoopIReadN (int SIdx, int addr, int num);
+    int  LoopOReadN (int SIdx, int addr, int num);
+    int  LoopCReadN (int SIdx, int addr, int num);
+    int  LoopSReadN (int SIdx, int addr, int num);
+    int  LoopAReadN (int SIdx, int addr, int num);
+    int  LoopRReadN (int SIdx, int addr, int num );
+    int  LoopFReadN (int SIdx, int addr, int num );
+    int  LoopReadCombineFinish(int SIdx);        //完成自動組合設定並開始產生組合封包
+
+    //  ============================= Loop write ============
+    void LoopWriteCombineStart (int SIdx);        //設定自動組合旗標
+    int  LoopOWriteN (int SIdx,  int addr, int num);
+    int  LoopCWriteN (int SIdx,  int addr, int num);
+    int  LoopSWriteN (int SIdx,  int addr, int num);
+    int  LoopAWriteN (int SIdx,  int addr, int num);
+    int  LoopRWriteN (int SIdx,  int addr, int num);
+    int  LoopFWriteN (int SIdx,  int addr, int num);
+    int  LoopWriteCombineFinish(int SIdx);        //完成自動組合設定並開始產生組合封包
+
+
+    void DirectClearQueue (int SIdx);             //清除命令
+    int  DirectWaitDone (int SIdx, int MaxWaitTime);  //等待直接命令完成
+    //  ============================= Direct read ============
+    void DirectReadCombineStart (int SIdx);       //設定自動組合旗標
+    int  DirectIReadN (int SIdx, int addr, int num);
+    int  DirectOReadN (int SIdx, int addr, int num);
+    int  DirectCReadN (int SIdx, int addr, int num);
+    int  DirectSReadN (int SIdx, int addr, int num);
+    int  DirectAReadN (int SIdx, int addr, int num);
+    int  DirectRReadN (int SIdx, int addr, int num );
+    int  DirectFReadN (int SIdx, int addr, int num );
+    int  DirectReadCombineFinish (int SIdx);      //完成自動組合設定並開始產生組合封包
+
+    //  ============================= Direct write ============
+    void DirectWriteCombineStart (int SIdx);       //設定自動組合旗標
+    int  DirectOWrite1 (int SIdx, int addr, int val);
+    int  DirectCWrite1 (int SIdx, int addr, int val);
+    int  DirectSWrite1 (int SIdx, int addr, int val);
+    int  DirectAWrite1 (int SIdx, int addr, int val);
+    int  DirectRWrite1 (int SIdx,  int addr, int val);
+    int  DirectFWrite1 (int SIdx,  int addr, double val);
+    int  DirectRWrite1Bit (int SIdx, int addr, int BitIdx, int BitValue);             //寫入 R bit
+    int  DirectRWriteString (int SIdx, int addr, int BufSize, char *Buf);            //寫入字串到 R
+    int  DirectOWriteN (int SIdx,  int addr, int num, int *data);
+    int  DirectCWriteN (int SIdx,  int addr, int num, int *data);
+    int  DirectSWriteN (int SIdx,  int addr, int num, int *data);
+    int  DirectAWriteN (int SIdx,  int addr, int num, int *data);
+    int  DirectRWriteN (int SIdx,  int addr, int num, int *data);
+    int  DirectFWriteN (int SIdx,  int addr, int num, double *data);
+    int  DirectWriteCombineFinish (int SIdx);      //完成自動組合設定並開始產生組合封包
+
+
+
+};
+
+#endif // SCIF2_H

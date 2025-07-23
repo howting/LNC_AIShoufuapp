@@ -1,0 +1,20 @@
+#ifndef SCIF2_GLOBAL_H
+#define SCIF2_GLOBAL_H
+
+#ifdef __QT
+    #include <QtCore/qglobal.h>
+    #if defined(SCIF2_LIBRARY)
+    #  define SCIF2SHARED_EXPORT Q_DECL_EXPORT
+    #else
+    #  define SCIF2SHARED_EXPORT Q_DECL_IMPORT
+    #endif
+#else
+    //#define SCIF2SHARED_EXPORT
+    #ifdef __DLL
+    #  define SCIF2SHARED_EXPORT Q_DECL_EXPORT
+    #else
+    #  define SCIF2SHARED_EXPORT Q_DECL_IMPORT
+    #endif
+#endif
+
+#endif // SCIF2_GLOBAL_H
