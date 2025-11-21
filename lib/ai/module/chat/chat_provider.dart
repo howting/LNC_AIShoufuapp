@@ -4,21 +4,29 @@ import 'package:get/get_connect/http/src/response/response.dart';
 import 'package:lnc_mach_app/ai/base/base_response.dart';
 import 'package:lnc_mach_app/ai/base/base_provider.dart';
 import 'package:lnc_mach_app/global.dart';
+import 'dart:convert';
+
 
 class ChatProvider extends BaseProvider {
   Future<Response<MapResponse>> qwen2text(String path,
       {required String? text,
-      bool isFollowUp = false,
-      String? selectedCountry,
-      String? selectedProvince,
-      String? selectedMachine,
-      String? selectedModel}) async {
+        bool isFollowUp = false,
+        String? selectedCountry,
+        String? selectedProvince,
+        String? selectedMachine,
+        String? selectedModel,
+        List<String>? base64Images,}) async {
+
+    print("送出圖片數量：${base64Images?.length ?? 0}");
+    for (var i = 0; i < (base64Images?.length ?? 0); i++) {
+      print("第 $i 張圖片 base64 長度：${base64Images![i].length}");
+    }
     final result = await post(
       path,
       {
-        "input_value": text,
+        "input_value": text ?? "",
         "employeeId": Global.profile.employeeId,
-        "images": [],
+        "base64Images": base64Images ?? [],
         "is_follow_up": isFollowUp,
         "selected_country": selectedCountry,
         "selected_province": selectedProvince,
@@ -33,9 +41,9 @@ class ChatProvider extends BaseProvider {
   Future<Response<BaseWavResponse>> wav2text(
       String path, List<int> data, String filename,
       {String? selectedCountry,
-      String? selectedProvince,
-      String? selectedMachine,
-      String? selectedModel}) async {
+        String? selectedProvince,
+        String? selectedMachine,
+        String? selectedModel}) async {
     final audio = MultipartFile(data, filename: filename);
     final result = await post(
       path,

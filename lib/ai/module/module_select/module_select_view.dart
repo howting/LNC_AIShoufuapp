@@ -8,6 +8,8 @@ import 'package:lnc_mach_app/ai/routes/app_pages.dart';
 import 'package:lnc_mach_app/global.dart';
 import 'package:lnc_mach_app/providers/recorn.dart';
 
+
+
 class ModuleSelectView extends StatefulWidget {
   const ModuleSelectView({super.key});
 
@@ -32,7 +34,11 @@ class _ModuleSelectViewState extends State<ModuleSelectView> {
   Widget build(BuildContext context) {
     return WillPopScope(
       onWillPop: () async {
-        return false;
+        // 可选：退出前清理
+        Global.recorn.clearTestingConnection();
+        Global.recorn.disconnect();
+        Global.recorn.cleanIsolate();
+        return true; // 允许系统执行返回（在根路由上=退出App）
       },
       child: Container(
         color: Colors.white,
@@ -69,7 +75,7 @@ class _ModuleSelectViewState extends State<ModuleSelectView> {
                         Icon(Icons.support_agent, color: Color(0xFF00ABB3), size: 33),
                         SizedBox(height: 10),
                         Text(
-                          "AI售服",
+                          "售服机器人",
                           textAlign: TextAlign.center,
                           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
                         ),
@@ -83,7 +89,7 @@ class _ModuleSelectViewState extends State<ModuleSelectView> {
             // 參數查詢
             Expanded(
               child: GestureDetector(
-                onTap: () => Get.toNamed(Routes.MAH_HOME),
+                onTap: () => Get.toNamed(Routes.MACHINE_CHAT),
                 child: AspectRatio(
                   aspectRatio: 1,
                   child: Container(
@@ -108,7 +114,7 @@ class _ModuleSelectViewState extends State<ModuleSelectView> {
                         Icon(Icons.screen_search_desktop, color: Color(0xFF00ABB3), size: 33),
                         SizedBox(height: 10),
                         Text(
-                          "参数查询",
+                          "參數查詢",
                           textAlign: TextAlign.center,
                           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
                         ),
@@ -186,7 +192,7 @@ class _ModuleSelectViewState extends State<ModuleSelectView> {
                         Icon(Icons.history, color: Color(0xFF00ABB3), size: 33),
                         SizedBox(height: 10),
                         Text(
-                          "售服紀錄",
+                          "AI售服查询",
                           textAlign: TextAlign.center,
                           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
                         ),

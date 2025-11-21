@@ -35,8 +35,9 @@ class MachineChatController extends GetxController {
 
   RxString selectedMachine = '请选择产业型号'.obs;
   RxString selectedModel = '请选择机器型号'.obs;
-  RxString selectedCountry = '请选择国家'.obs;
-  RxString selectedProvince = '请选择地区'.obs;
+  //RxString selectedCountry = '请选择国家'.obs;
+  //RxString selectedProvince = '请选择地区'.obs;
+  RxString selectedCountry = 'Select Language'.obs;
   RxString selectedOS = '请选择RIO'.obs;
   late WebSocket webSocket;
 
@@ -205,7 +206,7 @@ class MachineChatController extends GetxController {
       var result = await _provider.qwen2text(TEXT_POST,
         text: textController.text,
         isFollowUp: isFollowUp,
-        selectedProvince: selectedProvince.value,
+        // selectedProvince: selectedProvince.value,
         selectedMachine: selectedMachine.value,
         selectedModel: selectedModel.value,
         selectedCountry: selectedCountry.value,
@@ -286,7 +287,7 @@ class MachineChatController extends GetxController {
       // String base64String = base64Encode(fileBytes);
 
       var result = await _provider.wav2text(WAV_POST, fileBytes, fileName,
-          selectedProvince: selectedProvince.value,
+          // selectedProvince: selectedProvince.value,
           selectedMachine: selectedMachine.value,
           selectedModel: selectedModel.value,
           selectedCountry: selectedCountry.value,
@@ -390,28 +391,90 @@ class ChatMessage {
 
 class OptionsUtils {
   ///
-
   static final countries = [
-    '请选择国家',
-    "中国",
-    "美国",
-    "日本",
-    "德国",
-    "法国"
+    'Select Language', // 預設提示
+    '简体中文',
+    '繁體中文',
+    'English',
+    'Tiếng Việt',
+    '日本语',
+    '한국어',
+    'हिन्दी',
   ];
-  static Map<String, List<String>> countryProvinceMapping = {
-    '请选择国家': ['请选择省份'],
-    '中国': ['请选择省份', '广东', '江苏', '山东', '浙江', '河南'],
-    '美国': ['请选择省份', 'California', 'Texas', 'New York'],
-    '日本': ['请选择省份', '东京', '大阪', '京都'],
-    '德国': ['请选择省份', 'Bavaria', 'Berlin', 'Hamburg'],
-    '法国': [
-      '请选择省份',
-      'Île-de-France',
-      'Provence-Alpes-Côte d\'Azur',
-      'Brittany'
-    ],
-  };
+
+// static Map<String, List<String>> countryProvinceMapping = {
+//   'Select Country': ['Select Province'],
+
+//   'China': [
+//     'Select Province',
+//     '北京',
+//     '上海',
+//     '广州',
+//     '深圳',
+//     '重庆',
+//     '天津',
+//     '成都',
+//     '杭州',
+//     '武汉',
+//     '西安'
+//   ],
+
+//   'United States': [
+//     'Select Province',
+//     'California',
+//     'New York',
+//     'Texas',
+//     'Florida',
+//     'Illinois',
+//     'Washington',
+//     'Georgia',
+//     'Massachusetts',
+//     'North Carolina'
+//   ],
+
+//   'Japan': [
+//     'Select Province',
+//     '東京',
+//     '大阪',
+//     '京都',
+//     '北海道',
+//     '名古屋',
+//     '福岡',
+//     '沖縄',
+//     '神奈川',
+//     '広島'
+//   ],
+
+//   'Vietnam': [
+//     'Select Province',
+//     'Hà Nội',
+//     'Thành phố Hồ Chí Minh',
+//     'Hải Phòng',
+//     'Đà Nẵng',
+//     'Cần Thơ'
+//   ],
+
+//   'South Korea': [
+//     'Select Province',
+//     '서울',
+//     '부산',
+//     '인천',
+//     '대구',
+//     '광주',
+//     '수원'
+//   ],
+
+//   'India': [
+//     'Select Province',
+//     'दिल्ली',
+//     'मुंबई',
+//     'बेंगलुरु',
+//     'कोलकाता',
+//     'चेन्नई',
+//     'हैदराबाद',
+//     'पुणे'
+//   ],
+// };
   static final industrials = [
     '请选择产业型号',
     '铣床',

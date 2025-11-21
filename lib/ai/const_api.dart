@@ -17,6 +17,6 @@ const String USER_PROFILE = "api/get_user_profile/";
 const String FEEDBACK_MODIFY_POST = "api/modify_reply/";
 const String FEEDBACK_LIKE_POST = "api/like_reply/";
 
-/// 使用者反饋
+/// shoufu使用者反饋
 const String SHOUFUFEEDBACK_MODIFY_POST = "api/shoufumodify_reply/";
 const String SHOUFUFEEDBACK_LIKE_POST = "api/shoufulike_reply/";

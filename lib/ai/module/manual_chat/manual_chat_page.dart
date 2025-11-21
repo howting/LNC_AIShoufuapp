@@ -215,6 +215,40 @@ class ManualChatPage extends GetView<ManualChatController> {
   }
 
   Widget leftbubble(String text, int index, {bool isAnswering = false}) {
+    final waiting = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: const [
+        SizedBox(
+          width: 18, height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+        SizedBox(width: 8),
+        Text("生成中…", style: TextStyle(fontSize: 16, color: Colors.black54)),
+      ],
+    );
+
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        buildMessageContent(text), // 你的圖文/連結渲染
+        ObxValue<RxMap>(
+              (_) => Offstage( // ✅ 等待時隱藏下載/播放鈕
+            offstage: isAnswering,
+            child: InkWell(
+              onTap: () {
+                // 播放整段訊息
+                controller.textToWav(controller.chatMessageList[index].data, index);
+              },
+              child: controller.files.containsKey(index)
+                  ? const Icon(Icons.play_circle, color: Colors.brown, size: 26)
+                  : const Icon(Icons.download_for_offline, color: Colors.brown, size: 26),
+            ),
+          ),
+          controller.files,
+        ),
+      ],
+    );
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.start,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -231,35 +265,7 @@ class ManualChatPage extends GetView<ManualChatController> {
               bottomRight: Radius.circular(15),
             ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              buildMessageContent(text), // 🔁 核心處理函式
-              ObxValue<RxMap>(
-                    (_) => Offstage(
-                          offstage: false,
-                          child: InkWell(
-                            onTap: () {
-                              print("播放文本 index: $index, 文本内容: ${controller.chatMessageList[index].data}");
-                              controller.textToWav(controller.chatMessageList[index].data, index);
-                            },
-                            child: controller.files.containsKey(index)
-                                ? const Icon(
-                                  Icons.play_circle,
-                                  color: Colors.brown,
-                                  size: 26,
-                                  )
-                                : const Icon(
-                                  Icons.download_for_offline,
-                                  color: Colors.brown,
-                                  size: 26,
-                                  ),
-                          ),
-                    ),
-                    controller.files,
-              ),
-            ],
-          ),
+          child: isAnswering ? waiting : content, // ✅ 關鍵切換
         ),
       ],
     );
@@ -308,7 +314,7 @@ class ManualChatPage extends GetView<ManualChatController> {
         maxLines: 4,
         decoration: const InputDecoration(
             border: InputBorder.none,
-            hintText: "輸入你的消息...",
+            hintText: "输入你的消息...",
             hintStyle: TextStyle(
                 color: Colors.grey, fontWeight: FontWeight.w500, fontSize: 16),
             contentPadding: EdgeInsets.only(left: 16, right: 16)),
@@ -323,104 +329,96 @@ class ManualChatPage extends GetView<ManualChatController> {
       width: Get.width,
       child: Column(
         children: [
+          // 第一列：產業 / 機型
           Row(
             children: [
               Expanded(
-                  child: GestureDetector(
-                    onTap: () => Get.bottomSheet(
-                        optionBottomSheet(OptionsUtils.industrials, (val) {
-                          if (val == controller.selectedMachine.value) {
-                          } else {
-                            controller.selectedMachine(val);
-                            controller.selectedModel("请选择机器型号");
-                          }
-                        }),
-                        isScrollControlled: true),
-                    child: Container(
-                      height: 45.h,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(22.5),
-                        color: const Color.fromARGB(255, 245, 245, 245),
-                      ),
-                      child: Text(
-                        controller.selectedMachine.value,
-                        style:
-                        const TextStyle(fontSize: 16, color: Colors.grey),
-                      ),
+                child: GestureDetector(
+                  onTap: () => Get.bottomSheet(
+                    optionBottomSheet(OptionsUtils.industrials, (val) {
+                      if (val != controller.selectedMachine.value) {
+                        controller.selectedMachine(val);
+                        controller.selectedModel("请选择机器型号");
+                      }
+                    }),
+                    isScrollControlled: true,
+                  ),
+                  child: Container(
+                    height: 45.h,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(22.5),
+                      color: const Color.fromARGB(255, 245, 245, 245),
                     ),
-                  )),
+                    child: Text(
+                      controller.selectedMachine.value,
+                      style: const TextStyle(fontSize: 16, color: Colors.grey),
+                    ),
+                  ),
+                ),
+              ),
               SizedBox(width: 10.w),
               Expanded(
-                  child: GestureDetector(
-                    onTap: () => Get.bottomSheet(optionBottomSheet(
-                        OptionsUtils.machineTypeMapping[
-                        controller.selectedMachine.value]!,
-                            (val) => controller.selectedModel(val))),
-                    child: Container(
-                      height: 45.h,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(22.5),
-                        color: const Color.fromARGB(255, 245, 245, 245),
-                      ),
-                      child: Text(
-                        controller.selectedModel.value,
-                        style:
-                        const TextStyle(fontSize: 16, color: Colors.grey),
-                      ),
+                child: GestureDetector(
+                  onTap: () => Get.bottomSheet(
+                    optionBottomSheet(
+                      OptionsUtils
+                          .machineTypeMapping[controller.selectedMachine.value]!,
+                          (val) => controller.selectedModel(val),
                     ),
-                  )),
+                  ),
+                  child: Container(
+                    height: 45.h,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(22.5),
+                      color: const Color.fromARGB(255, 245, 245, 245),
+                    ),
+                    child: Text(
+                      controller.selectedModel.value,
+                      style: const TextStyle(fontSize: 16, color: Colors.grey),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
+
           SizedBox(height: 10.h),
+
+          // 第二列：單一「請選擇語言」按鈕（只設定國家，不動省份）
           Row(
             children: [
               Expanded(
-                  child: GestureDetector(
-                    onTap: () => Get.bottomSheet(
-                        optionBottomSheet(OptionsUtils.countries, (val) {
-                          if (val == controller.selectedCountry.value) {
-                          } else {
-                            controller.selectedCountry(val);
-                            controller.selectedProvince("请选择省份");
-                          }
-                        })),
-                    child: Container(
-                      height: 45.h,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(22.5),
-                        color: const Color.fromARGB(255, 245, 245, 245),
-                      ),
-                      child: Text(
-                        controller.selectedCountry.value,
-                        style:
-                        const TextStyle(fontSize: 16, color: Colors.grey),
-                      ),
+                child: GestureDetector(
+                  onTap: () => Get.bottomSheet(
+                    optionBottomSheet(
+                      OptionsUtils.countries, // 使用語系代碼清單
+                          (val) {
+                        controller.selectedCountry(val);
+                        // 不重置 province
+                      },
                     ),
-                  )),
-              SizedBox(width: 10.w),
-              Expanded(
-                  child: GestureDetector(
-                    onTap: () => Get.bottomSheet(optionBottomSheet(
-                        OptionsUtils.countryProvinceMapping[
-                        controller.selectedCountry.value]!,
-                            (val) => controller.selectedProvince(val))),
-                    child: Container(
-                      height: 45.h,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(22.5),
-                        color: const Color.fromARGB(255, 245, 245, 245),
-                      ),
-                      child: Text(
-                        controller.selectedProvince.value,
-                        style:
-                        const TextStyle(fontSize: 16, color: Colors.grey),
-                      ),
+                    isScrollControlled: true,
+                  ),
+                  child: Container(
+                    height: 45.h,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(22.5),
+                      color: const Color.fromARGB(255, 245, 245, 245),
                     ),
-                  )),
+                    child: Text(
+                      (controller.selectedCountry.value.isEmpty ||
+                          controller.selectedCountry.value == 'Select Language')
+                          ? '请选择语言'
+                          : controller.selectedCountry.value,
+                      // 👇 少的就是這個逗號
+                      style: const TextStyle(fontSize: 16, color: Colors.grey),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ],

@@ -8,7 +8,7 @@ import 'package:lnc_mach_app/ai/module/machine_chat/machine_chat_controller.dart
 import 'package:lnc_mach_app/ai/module/voice_record/customer_chat_voice_record_bar.dart';
 import 'package:lnc_mach_app/ai/module/voice_record/customer_chat_voice_record_layout.dart';
 import 'package:lnc_mach_app/ai/routes/app_pages.dart';
-import 'package:lnc_mach_app/widgets/machine_main/machine_appbar.dart';
+//import 'package:lnc_mach_app/widgets/machine_main/machine_appbar.dart';
 
 class MachineChatPage extends GetView<MachineChatController> {
   String formatNumberedList(String text) {
@@ -55,10 +55,38 @@ class MachineChatPage extends GetView<MachineChatController> {
                 : Get.height,
             child: Scaffold(
               backgroundColor: Colors.white,
-              appBar: PreferredSize(
-                preferredSize: const Size.fromHeight(60),
-                child: MachineAppBar(
-                    machineName: controller.machineName, ip: controller.ip),
+              appBar: AppBar(
+                backgroundColor: Colors.white,
+                elevation: 0,
+                centerTitle: true,
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back, color: Colors.grey),
+                  onPressed: () => Get.back(),
+                ),
+                title: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '參數查詢', // 如果要顯示機台名稱，可改成：controller.machineName
+                      style: const TextStyle(
+                        fontSize: 18,
+                        color: Colors.blueAccent,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    // 想隱藏 IP 就把這個 Text 拿掉
+                    Text(
+                      '${controller.ip}',
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+                actions: [
+                  IconButton(
+                    onPressed: () => Get.toNamed(Routes.PROFILE),
+                    icon: const Icon(Icons.person, color: Colors.grey),
+                  ),
+                ],
               ),
               // AppBar(
               //   backgroundColor: Colors.white,
@@ -250,7 +278,7 @@ class MachineChatPage extends GetView<MachineChatController> {
         maxLines: 4,
         decoration: const InputDecoration(
             border: InputBorder.none,
-            hintText: "輸入你的消息...",
+            hintText: "输入你的消息...",
             hintStyle: TextStyle(
                 color: Colors.grey, fontWeight: FontWeight.w500, fontSize: 16),
             contentPadding: EdgeInsets.only(left: 16, right: 16)),
@@ -260,150 +288,141 @@ class MachineChatPage extends GetView<MachineChatController> {
 
   Widget selectRow() {
     return Obx(() => Container(
-          margin: EdgeInsets.symmetric(vertical: 10.h, horizontal: 16.w),
-          height: 155.h,
-          width: Get.width,
-          child: Column(
+      margin: EdgeInsets.symmetric(vertical: 10.h, horizontal: 16.w),
+      height: 155.h,
+      width: Get.width,
+      child: Column(
+        children: [
+          // 第一列：產業 / 機型
+          Row(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                      child: GestureDetector(
-                    onTap: () => Get.bottomSheet(
-                        optionBottomSheet(OptionsUtils.industrials, (val) {
-                          if (val == controller.selectedMachine.value) {
-                          } else {
-                            controller.selectedMachine(val);
-                            controller.selectedModel("请选择机器型号");
-                          }
-                        }),
-                        isScrollControlled: true),
-                    child: Container(
-                      height: 45.h,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(22.5),
-                        color: const Color.fromARGB(255, 245, 245, 245),
-                      ),
-                      child: Text(
-                        controller.selectedMachine.value,
-                        style:
-                            const TextStyle(fontSize: 16, color: Colors.grey),
-                      ),
-                    ),
-                  )),
-                  SizedBox(width: 10.w),
-                  Expanded(
-                      child: GestureDetector(
-                    onTap: () => Get.bottomSheet(optionBottomSheet(
-                        OptionsUtils.machineTypeMapping[
-                            controller.selectedMachine.value]!,
-                        (val) => controller.selectedModel(val))),
-                    child: Container(
-                      height: 45.h,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(22.5),
-                        color: const Color.fromARGB(255, 245, 245, 245),
-                      ),
-                      child: Text(
-                        controller.selectedModel.value,
-                        style:
-                            const TextStyle(fontSize: 16, color: Colors.grey),
-                      ),
-                    ),
-                  )),
-                ],
-              ),
-              SizedBox(height: 10.h),
-              Row(
-                children: [
-                  Expanded(
-                      child: GestureDetector(
-                    onTap: () => Get.bottomSheet(
-                        optionBottomSheet(OptionsUtils.countries, (val) {
-                      if (val == controller.selectedCountry.value) {
-                      } else {
-                        controller.selectedCountry(val);
-                        controller.selectedProvince("请选择省份");
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => Get.bottomSheet(
+                    optionBottomSheet(OptionsUtils.industrials, (val) {
+                      if (val != controller.selectedMachine.value) {
+                        controller.selectedMachine(val);
+                        controller.selectedModel("请选择机器型号");
                       }
-                    })),
-                    child: Container(
-                      height: 45.h,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(22.5),
-                        color: const Color.fromARGB(255, 245, 245, 245),
-                      ),
-                      child: Text(
-                        controller.selectedCountry.value,
-                        style:
-                            const TextStyle(fontSize: 16, color: Colors.grey),
-                      ),
+                    }),
+                    isScrollControlled: true,
+                  ),
+                  child: Container(
+                    height: 45.h,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(22.5),
+                      color: const Color.fromARGB(255, 245, 245, 245),
                     ),
-                  )),
-                  SizedBox(width: 10.w),
-                  Expanded(
-                      child: GestureDetector(
-                    onTap: () => Get.bottomSheet(optionBottomSheet(
-                        OptionsUtils.countryProvinceMapping[
-                            controller.selectedCountry.value]!,
-                        (val) => controller.selectedProvince(val))),
-                    child: Container(
-                      height: 45.h,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(22.5),
-                        color: const Color.fromARGB(255, 245, 245, 245),
-                      ),
-                      child: Text(
-                        controller.selectedProvince.value,
-                        style:
-                            const TextStyle(fontSize: 16, color: Colors.grey),
-                      ),
-                    ),
-                  )),
-                ],
-              ),
-              SizedBox(height: 10.h),
-              Row(
-                children: [
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => Get.bottomSheet(
-                        optionBottomSheet(
-                          OptionsUtils.osOptions,
-                              (val) => controller.selectedOS(val),
-                        ),
-                        isScrollControlled: true,
-                      ),
-                      child: Container(
-                        height: 45.h,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(22.5),
-                          color: const Color.fromARGB(255, 245, 245, 245),
-                        ),
-                        child: Obx(() => Text(
-                          controller.selectedOS.value,
-                          style: const TextStyle(fontSize: 16, color: Colors.grey),
-                        )),
-                      ),
+                    child: Text(
+                      controller.selectedMachine.value,
+                      style: const TextStyle(fontSize: 16, color: Colors.grey),
                     ),
                   ),
-                ],
+                ),
               ),
-
+              SizedBox(width: 10.w),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => Get.bottomSheet(
+                    optionBottomSheet(
+                      OptionsUtils
+                          .machineTypeMapping[controller.selectedMachine.value]!,
+                          (val) => controller.selectedModel(val),
+                    ),
+                  ),
+                  child: Container(
+                    height: 45.h,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(22.5),
+                      color: const Color.fromARGB(255, 245, 245, 245),
+                    ),
+                    child: Text(
+                      controller.selectedModel.value,
+                      style: const TextStyle(fontSize: 16, color: Colors.grey),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
-        ));
+
+          SizedBox(height: 10.h),
+
+          // 第二列：單一「請選擇語言」按鈕（只設定國家，不動省份）
+          Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => Get.bottomSheet(
+                    optionBottomSheet(
+                      OptionsUtils.countries,
+                          (val) => controller.selectedCountry(val),
+                    ),
+                    isScrollControlled: true,
+                  ),
+                  child: Container(
+                    height: 45.h,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(22.5),
+                      color: const Color.fromARGB(255, 245, 245, 245),
+                    ),
+                    child: Text(
+                      (controller.selectedCountry.value.isEmpty ||
+                          controller.selectedCountry.value ==
+                              OptionsUtils.countries.first)
+                          ? '请选择语言'
+                          : controller.selectedCountry.value,
+                      style: const TextStyle(fontSize: 16, color: Colors.grey),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          SizedBox(height: 10.h),
+
+          // 第三列：OS 選擇
+          Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => Get.bottomSheet(
+                    optionBottomSheet(
+                      OptionsUtils.osOptions,
+                          (val) => controller.selectedOS(val),
+                    ),
+                    isScrollControlled: true,
+                  ),
+                  child: Container(
+                    height: 45.h,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(22.5),
+                      color: const Color.fromARGB(255, 245, 245, 245),
+                    ),
+                    child: Obx(() => Text(
+                      controller.selectedOS.value,
+                      style: const TextStyle(fontSize: 16, color: Colors.grey),
+                    )),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ));
   }
 
   Widget optionBottomSheet(
       List<String> options, Function(String option) selectAction) {
     return Container(
       height:
-          options.length >= 7 ? Get.height * .6 : options.length * 60.h + 50.h,
+      options.length >= 7 ? Get.height * .6 : options.length * 60.h + 50.h,
       padding: EdgeInsets.only(top: 20.h),
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -438,6 +457,7 @@ class MachineChatPage extends GetView<MachineChatController> {
       ),
     );
   }
+
 
   Widget buttonRow(CustomerChatVoiceRecordBar bar) {
     return Container(

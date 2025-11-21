@@ -123,7 +123,7 @@ class ProfilePage extends BaseAppBarView<ProfileController> {
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           RichText(
-            maxLines: 20,
+            // maxLines: 20,
             text: TextSpan(
               text: "问题内容: ",
               style: TextStyle(
@@ -145,7 +145,7 @@ class ProfilePage extends BaseAppBarView<ProfileController> {
           ),
           SizedBox(height: 9.h),
           RichText(
-            maxLines: 20,
+            // maxLines: 20,
             text: TextSpan(
               text: "回复内容: ",
               style: TextStyle(

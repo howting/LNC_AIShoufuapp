@@ -14,6 +14,10 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>lnc_mach_app</string>
+	<key>NSCameraUsageDescription</key>
+	<string>需要使用相機上傳圖片</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>需要讀取相簿</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

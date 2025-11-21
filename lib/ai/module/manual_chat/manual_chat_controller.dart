@@ -10,6 +10,52 @@ import 'package:lnc_mach_app/ai/module/manual_chat/manual_chat_provider.dart';
 import 'package:lnc_mach_app/global.dart';
 import 'package:path_provider/path_provider.dart';
 
+
+
+extension IterableWhereOrNullX<E> on Iterable<E> {
+  E? firstWhereOrNull(bool Function(E element) test) {
+    for (final e in this) {
+      if (test(e)) return e;
+    }
+    return null;
+  }
+
+  E? lastWhereOrNull(bool Function(E element) test) {
+    final list = this is List<E> ? (this as List<E>) : toList(growable: false);
+    for (var i = list.length - 1; i >= 0; i--) {
+      final e = list[i];
+      if (test(e)) return e;
+    }
+    return null;
+  }
+}
+// 展平一層常見包裝：response_data / response / data
+Map<String, dynamic> _unwrapOnce(Map<String, dynamic> src) {
+  final v = (src['response_data'] ?? src['response'] ?? src['data']);
+  if (v is Map) return Map<String, dynamic>.from(v as Map);
+  return src;
+}
+
+// 取文字答案：依序嘗試常見 key
+String? _pickText(Map<String, dynamic> d) {
+  for (final k in ['reply_content', 'message', 'text_output', 'answer', 'data']) {
+    final v = d[k];
+    if (v is String && v.trim().isNotEmpty) return v;
+  }
+  return null;
+}
+
+// 取清單答案（例如 reply_list 或 message: List）
+List<Map<String, dynamic>>? _pickList(Map<String, dynamic> d) {
+  final v = d['reply_list'] ?? d['message'] ?? d['list'];
+  if (v is List) {
+    return v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+  return null;
+}
+
+
+
 class ManualChatController extends GetxController {
   final ManualChatProvider _provider;
   ManualChatController(this._provider);
@@ -32,8 +78,10 @@ class ManualChatController extends GetxController {
 
   RxString selectedMachine = '请选择产业型号'.obs;
   RxString selectedModel = '请选择机器型号'.obs;
-  RxString selectedCountry = '请选择国家'.obs;
-  RxString selectedProvince = '请选择省份'.obs;
+  // RxString selectedCountry = '请选择国家'.obs;
+  // RxString selectedProvince = '请选择省份'.obs;
+  RxString selectedCountry = 'Select Language'.obs;
+
 
   late WebSocket webSocket;
 
@@ -58,24 +106,57 @@ class ManualChatController extends GetxController {
     webSocket = await WebSocket.connect(
       "ws://8.138.246.252:8000/ws/chat_qwen_${Global.profile.employeeId}/",
     );
+
     webSocket.listen((event) {
-      print("---- Socket ----- ");
-      print("---- Socket ----- : $event");
-      if (event is String) {
-        Map<String, dynamic> map = json.decode(event);
-        if (map["response"] != null &&
-            map["response"]["reply_content"] is String) {
-          String inquiryId = map["response"]["inquiry_id"];
-          String replyContent = map["response"]["reply_content"];
-          socketMessage[inquiryId] = replyContent;
-          ChatMessage? message = chatMessageList
-              .firstWhereOrNull((element) => element.inquiryId == inquiryId);
-          if (message != null) {
-            message.data = replyContent;
-            message.isAnswering = false;
-            chatMessageList.refresh();
-          }
+      try {
+        if (event is! String) return;
+        final root = json.decode(event);
+        if (root is! Map) return;
+
+        final d = _unwrapOnce(Map<String, dynamic>.from(root));
+        final String? inquiryId = d['inquiry_id']?.toString();
+
+        final list = _pickList(d);
+        final txt  = _pickText(d);
+
+        // 鎖定要更新的那顆泡泡：先用 inquiryId 找，找不到就用最後一顆 pending
+        ChatMessage? msg;
+        if (inquiryId != null && inquiryId.isNotEmpty) {
+          msg = chatMessageList.firstWhereOrNull((m) => m.inquiryId == inquiryId);
         }
+        msg ??= chatMessageList.lastWhereOrNull((m) => !m.isMe && m.isAnswering);
+
+        // 找不到就新增一顆，避免內容消失
+        msg ??= (() {
+          final neu = ChatMessage(data: '', isMe: false, isAnswering: true, inquiryId: inquiryId);
+          chatMessageList.add(neu);
+          return neu;
+        })();
+
+        // 更新內容 + 關轉圈
+        if (list != null && list.isNotEmpty) {
+          msg.data = list.map((e) {
+            final t = (e['title'] ?? e['header'] ?? e['name'] ?? '').toString();
+            final c = (e['comment'] ?? e['formatted_text'] ?? e['text'] ?? e['content'] ?? '').toString();
+            return (t.isNotEmpty ? '【$t】\n' : '') + c;
+          }).join('\n\n');
+          msg.isAnswering = false;
+        } else if ((txt ?? '').trim().isNotEmpty) {
+          msg.data = txt!;
+          msg.isAnswering = false;
+        } else {
+          // 心跳或中間狀態，先不動
+          return;
+        }
+
+        // 若這次才拿到 inquiryId，也綁上
+        if (inquiryId != null && (msg.inquiryId ?? '').isEmpty) {
+          msg.inquiryId = inquiryId;
+        }
+
+        chatMessageList.refresh();
+      } catch (e) {
+        print('WS parse error: $e');
       }
     });
   }
@@ -83,39 +164,83 @@ class ManualChatController extends GetxController {
   ///文字提問
   Future<void> sendAction({bool isFollowUp = false}) async {
     try {
-      if (selectedMachine.value == "请选择产业型号" ||
-          selectedModel.value == "请选择机器型号") {
+      if (selectedMachine.value == "请选择产业型号" || selectedModel.value == "请选择机器型号") {
         Get.snackbar("Error", "请选择产业型号和机器型号。");
         return;
       }
       textFocusNode.unfocus();
 
-      final selfMessage = ChatMessage(data: textController.text, isMe: true);
-      chatMessageList.add(selfMessage);
+      final ask = textController.text.trim();
+      if (ask.isEmpty) return;
 
-      var result = await _provider.qwen2text(TEXT_POST,
-          text: textController.text,
-          isFollowUp: isFollowUp,
-          selectedProvince: selectedProvince.value,
-          selectedMachine: selectedMachine.value,
-          selectedModel: selectedModel.value,
-          selectedCountry: selectedCountry.value);
+      // 右側：使用者訊息
+      chatMessageList.add(ChatMessage(data: ask, isMe: true));
+
+      // 左側：先放等待中的泡泡
+      final pending = ChatMessage(data: '生成中…', isMe: false, isAnswering: true);
+      chatMessageList.add(pending);
+
+      final result = await _provider.qwen2text(
+        TEXT_POST,
+        text: ask,
+        isFollowUp: isFollowUp,
+        selectedMachine: selectedMachine.value,
+        selectedModel: selectedModel.value,
+        selectedCountry: selectedCountry.value,
+      );
       textController.clear();
-      if (result.body?.code == "success") {
-        chatMessageList.add(ChatMessage(
-            data: result.body?.data?["message"] ?? "服務器繁忙",
-            inquiryId: result.body?.data?["inquiry_id"],
-            isMe: false,
-            isAnswering: true));
-        print(result.body);
+
+      if (result.body?.code == "success" && result.body?.data != null) {
+        final raw = Map<String, dynamic>.from(result.body!.data!);
+        final d = _unwrapOnce(raw);
+
+        // 綁 inquiryId 讓 WS 能對到
+        final inquiryId = (d['inquiry_id'] ?? raw['inquiry_id'])?.toString();
+        if (inquiryId != null && inquiryId.isNotEmpty) {
+          pending.inquiryId = inquiryId;
+        }
+
+        // 若 HTTP 已經有最終內容 → 直接關轉圈
+        final list = _pickList(d);
+        final txt  = _pickText(d);
+        final hasFinal = (list != null && list.isNotEmpty) || (txt != null && txt.trim().isNotEmpty);
+
+        if (hasFinal) {
+          if (list != null && list.isNotEmpty) {
+            // 這裡是「面板模式」（多筆回覆）
+            // 你若在 ManualChatPage 只走文字流，可把 list 轉文字後塞回 pending.data
+            pending.data = list.map((e) {
+              final t = (e['title'] ?? e['header'] ?? e['name'] ?? '').toString();
+              final c = (e['comment'] ?? e['formatted_text'] ?? e['text'] ?? e['content'] ?? '').toString();
+              return (t.isNotEmpty ? '【$t】\n' : '') + c;
+            }).join('\n\n');
+          } else {
+            pending.data = txt ?? '';
+          }
+          pending.isAnswering = false;    // ← 關轉圈
+        } else {
+          // 還要等 WS → 保持轉圈
+          pending.data = '生成中…';
+          pending.isAnswering = true;
+        }
+        chatMessageList.refresh();
       } else {
-        chatMessageList.add(ChatMessage(data: "服務器繁忙", isMe: false));
+        pending.data = "服務器繁忙";
+        pending.isAnswering = false;
+        chatMessageList.refresh();
       }
     } catch (e) {
-      chatMessageList
-          .add(ChatMessage(data: "服務器繁忙", isMe: false, isAnswering: true));
-      print(e.toString());
-
+      // 找到最後一顆 pending，收掉轉圈顯示錯誤
+      for (int i = chatMessageList.length - 1; i >= 0; i--) {
+        final m = chatMessageList[i];
+        if (!m.isMe && m.isAnswering) {
+          m.data = "服務器繁忙";
+          m.isAnswering = false;
+          chatMessageList.refresh();
+          return;
+        }
+      }
+      chatMessageList.add(ChatMessage(data: "服務器繁忙", isMe: false));
     }
   }
 
@@ -132,7 +257,7 @@ class ManualChatController extends GetxController {
       // String base64String = base64Encode(fileBytes);
 
       var result = await _provider.wav2text(WAV_POST, fileBytes, fileName,
-          selectedProvince: selectedProvince.value,
+          // selectedProvince: selectedProvince.value,
           selectedMachine: selectedMachine.value,
           selectedModel: selectedModel.value,
           selectedCountry: selectedCountry.value);
@@ -211,37 +336,106 @@ class ChatMessage {
 
 class OptionsUtils {
   ///
-  static final countries = ['请选择国家', "中国", "美国", "日本", "德国", "法国"];
-  static Map<String, List<String>> countryProvinceMapping = {
-    '请选择国家': ['请选择省份'],
-    '中国': ['请选择省份', '广东', '江苏', '山东', '浙江', '河南'],
-    '美国': ['请选择省份', 'California', 'Texas', 'New York'],
-    '日本': ['请选择省份', '东京', '大阪', '京都'],
-    '德国': ['请选择省份', 'Bavaria', 'Berlin', 'Hamburg'],
-    '法国': ['请选择省份', 'Île-de-France', 'Provence-Alpes-Côte d\'Azur', 'Brittany'],
-  };
+  static final countries = [
+    'Select Language', // 預設提示
+    '简体中文',
+    '繁體中文',
+    'English',
+    'Tiếng Việt',
+    '日本语',
+    '한국어',
+    'हिन्दी',
+  ];
+
+// static Map<String, List<String>> countryProvinceMapping = {
+//   'Select Country': ['Select Province'],
+
+//   'China': [
+//     'Select Province',
+//     '北京',
+//     '上海',
+//     '广州',
+//     '深圳',
+//     '重庆',
+//     '天津',
+//     '成都',
+//     '杭州',
+//     '武汉',
+//     '西安'
+//   ],
+
+//   'United States': [
+//     'Select Province',
+//     'California',
+//     'New York',
+//     'Texas',
+//     'Florida',
+//     'Illinois',
+//     'Washington',
+//     'Georgia',
+//     'Massachusetts',
+//     'North Carolina'
+//   ],
+
+//   'Japan': [
+//     'Select Province',
+//     '東京',
+//     '大阪',
+//     '京都',
+//     '北海道',
+//     '名古屋',
+//     '福岡',
+//     '沖縄',
+//     '神奈川',
+//     '広島'
+//   ],
+
+//   'Vietnam': [
+//     'Select Province',
+//     'Hà Nội',
+//     'Thành phố Hồ Chí Minh',
+//     'Hải Phòng',
+//     'Đà Nẵng',
+//     'Cần Thơ'
+//   ],
+
+//   'South Korea': [
+//     'Select Province',
+//     '서울',
+//     '부산',
+//     '인천',
+//     '대구',
+//     '광주',
+//     '수원'
+//   ],
+
+//   'India': [
+//     'Select Province',
+//     'दिल्ली',
+//     'मुंबई',
+//     'बेंगलुरु',
+//     'कोलकाता',
+//     'चेन्नई',
+//     'हैदराबाद',
+//     'पुणे'
+//   ],
+// };
   static final industrials = [
     '请选择产业型号',
-    '銑床',
+    '铣床',
     '车床',
-    '弹簧机',
     '关节机器人',
     '滑轨机器人',
-    '铝型材',
     '木工机',
-    ///'喷涂',
+    '塑胶机',
+    '弹簧机',
     '切割机',
-    '塑料机',
-    ///'磨床',
-    ///'缝纫机',
-    ///'沖床',
-    ///'牙雕机',
-    ///'APAC WIN',
-    ///'鞋机',
-    ///'激光加工产业'
+    '铝型材',
+    'ES9',
   ];
+
   static final machineTypeMapping = {
-    '銑床': [
+    '铣床': [
       '请选择机器型号',
       'MG6850_6800D_2800D',
       'MG5850_5800D',
@@ -252,39 +446,26 @@ class OptionsUtils {
       'M_MA_MP5850_5800D_3200D',
       'M_MA_MP5800A_3200A',
     ],
-    '车床': ['请选择机器型号' , "type_A", "type_B"],
-    '弹簧机': ['请选择机器型号', 'S2850D3'],
+    '车床': ['请选择机器型号', 'type_A', 'type_B'],
     '关节机器人': [
       '请选择机器型号',
       '搬运机器人',
       '冲压机器人',
-      ///'抛光机器人',
       '焊接机器人',
       '喷涂机器人',
-      ///'APAC产业机械',
-      ///'镜面铣',
-      ///'水刀切割机'
     ],
     '滑轨机器人': [
       '请选择机器型号',
       'R6800',
     ],
-    '铝型材': ['请选择机器型号', '铝型材(MA)'],
     '木工机': [
       '请选择机器型号',
-      ///'实木机',
-      ///'开料机',
-      ///'隼槽机',
       '封边机',
       '六面鑽',
       '电子锯',
-      ///'木工中控系统',
       '门锁机',
-      ///'木工五轴产业机械专用机'
     ],
-    ///'喷涂': ['请选择机器型号', 'LNC-R8800', 'PMC3003-P', 'RS8800'],
-    '切割机': ['请选择机器型号', '切割机(SC)'],
-    '塑料机': [
+    '塑胶机': [
       '请选择机器型号',
       'ELC-6200D3',
       'ELCLCD-5820D3',
@@ -292,15 +473,11 @@ class OptionsUtils {
       'IN5800',
       'IN6800',
     ],
-    ///'磨床': ['请选择机器型号', '磨床', '逆向工程机械', '深孔加工机'],
-    ///'缝纫机': ['请选择机器型号', '针车', '裁断机'],
-    ///'沖床': ['请选择机器型号', '沖床机械'],
-    ///'牙雕机': ['请选择机器型号', '牙雕机'],
-    ///'APAC WIN': ['请选择机器型号', 'APAC WIN'],
-    ///鞋机': ['请选择机器型号', '鞋机'],
-    ///'激光加工产业': ['请选择机器型号', '激光切割机'],
-    '请选择产业型号': [
-      '请选择机器型号',
-    ],
+    '弹簧机': ['请选择机器型号', 'S2850D3'],
+    '切割机': ['请选择机器型号', '切割机(SC)'],
+    '铝型材': ['请选择机器型号', '铝型材(MA)'],
+    'ES9': ['请选择机器型号', 'ES9'],
+    '请选择产业型号': ['请选择机器型号'],
   };
 }
+
